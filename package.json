@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.3",
     "yaml": "^2.8.1",
     "zod": "^4.1.5"
   },
