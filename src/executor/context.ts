@@ -1,8 +1,9 @@
+import type { AiraConfig } from "../config/types";
 import type { TemplateContext } from "../context/types";
 import type { RunState } from "../run/types";
 
 export interface ExecutionContextInput {
-  config: Record<string, unknown>;
+  config: AiraConfig;
   artifacts?: Record<string, unknown>;
 }
 
@@ -12,7 +13,7 @@ export function createExecutionTemplateContext(
 ): TemplateContext {
   return {
     input: state.input,
-    config: context.config,
+    config: { ...context.config },
     artifacts: context.artifacts ?? {},
     steps: state.steps,
     run: {

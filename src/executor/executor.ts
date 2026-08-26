@@ -1,4 +1,12 @@
+import path from "node:path";
+
+import { validateAgentCompletion } from "../agent/completion";
+import type { AgentRuntime } from "../agent/runtime";
+import type { AgentStepResult } from "../agent/types";
+import { readArtifact, writeArtifact } from "../artifacts/manager";
+import { loadCommand } from "../commands/loader";
 import { evaluateCondition } from "../conditions/evaluator";
+import { getRunPaths } from "../run/paths";
 import { patchStepState, setRunStatus } from "../run/state";
 import { saveRun } from "../run/persistence";
 import type { RunState, StepState } from "../run/types";
@@ -13,11 +21,18 @@ import type {
 } from "../shell/types";
 import { interpolateTemplate } from "../template/interpolate";
 import type {
+  AgentStep,
   LoopStep,
   ShellStep,
   Workflow,
   WorkflowStep,
 } from "../workflow/types";
+import {
+  composeAgentPrompt,
+  createAgentCompletionSpec,
+  resolveAgentCommandPath,
+  resolveAgentStepConfiguration,
+} from "./agent-step";
 import {
   createExecutionTemplateContext,
   type ExecutionContextInput,
@@ -42,6 +57,10 @@ export interface ExecuteWorkflowParams {
   mode?: ExecutionMode;
   now?: () => Date;
   shellRunner?: ShellRunner;
+  /** Required only when an agent step is reached. */
+  agentRuntime?: AgentRuntime;
+  /** Root containing reusable command Markdown files. */
+  commandsDir?: string;
 }
 
 interface PreparedShellCommand {
@@ -71,6 +90,8 @@ interface ExecutionRuntime {
   shellTimeout?: number;
   clock: () => Date;
   shellRunner: ShellRunner;
+  agentRuntime?: AgentRuntime;
+  commandsDir?: string;
   state: RunState;
 }
 
@@ -102,6 +123,8 @@ export async function executeWorkflow(
     shellTimeout: params.shellTimeout,
     clock: params.now ?? systemClock,
     shellRunner: params.shellRunner ?? runShellCommand,
+    agentRuntime: params.agentRuntime,
+    commandsDir: params.commandsDir,
     state: params.state,
   };
 
@@ -127,6 +150,8 @@ export async function executeWorkflow(
       { runId: runtime.state.id },
     );
   }
+
+  await initializeEffectiveArtifactContext(runtime, params.workflow);
 
   for (const step of params.workflow.steps) {
     const stepState = getStepState(runtime.state, step.id);
@@ -165,18 +190,12 @@ export async function executeWorkflow(
     switch (step.uses) {
       case "shell":
       case "approval":
+      case "agent":
         outcome = await executeTopLevelNonLoopStep(runtime, step);
         break;
       case "loop":
         outcome = await executeLoopStep(runtime, step);
         break;
-      case "agent":
-        return failTechnically(runtime, {
-          stepId: step.id,
-          message:
-            `step "${step.id}" uses unsupported step type ` +
-            `"${step.uses}"`,
-        });
       default:
         return failTechnically(runtime, {
           stepId: (step as WorkflowStep).id,
@@ -198,9 +217,60 @@ export async function executeWorkflow(
   return runtime.state;
 }
 
+async function initializeEffectiveArtifactContext(
+  runtime: ExecutionRuntime,
+  workflow: Workflow,
+): Promise<void> {
+  const persistedArtifacts: Record<string, string> = {};
+
+  try {
+    for (const name of Object.keys(runtime.state.artifacts)) {
+      persistedArtifacts[name] = await readArtifact({
+        runsRoot: runtime.runsRoot,
+        state: runtime.state,
+        name,
+      });
+    }
+  } catch (cause) {
+    const step =
+      workflow.steps.find(
+        (candidate) =>
+          getStepState(runtime.state, candidate.id)?.status === "pending",
+      ) ?? workflow.steps[0];
+
+    if (step === undefined) {
+      throw new ExecutionError(
+        `could not load persisted artifact context: ${getErrorMessage(cause)}`,
+        { runId: runtime.state.id, cause },
+      );
+    }
+
+    runtime.state = {
+      ...runtime.state,
+      current_step: step.id,
+    };
+    return failTechnically(runtime, {
+      stepId: step.id,
+      message:
+        `could not load persisted artifact context: ` +
+        getErrorMessage(cause),
+      cause,
+      markStep: getStepState(runtime.state, step.id) !== undefined,
+    });
+  }
+
+  runtime.context = {
+    ...runtime.context,
+    artifacts: {
+      ...(runtime.context.artifacts ?? {}),
+      ...persistedArtifacts,
+    },
+  };
+}
+
 async function executeTopLevelNonLoopStep(
   runtime: ExecutionRuntime,
-  step: Extract<WorkflowStep, { uses: "shell" | "approval" }>,
+  step: Extract<WorkflowStep, { uses: "shell" | "approval" | "agent" }>,
 ): Promise<StepOutcome> {
   const shouldExecute = await evaluateStepWhen(runtime, step);
 
@@ -216,6 +286,10 @@ async function executeTopLevelNonLoopStep(
     const waitingAt = readClock(runtime.clock, runtime.state.id, step.id);
     await persistRuntimeState(runtime, waitingAt, step.id);
     return "waiting";
+  }
+
+  if (step.uses === "agent") {
+    return executeAgentStep(runtime, step, { kind: "top-level" });
   }
 
   return executeShellStep(runtime, step, { kind: "top-level" });
@@ -436,12 +510,9 @@ async function executeLoopChild(
         loopId: loop.id,
       });
     case "agent":
-      return failTechnically(runtime, {
-        stepId: child.id,
-        parentLoopId: loop.id,
-        message:
-          `step "${child.id}" uses unsupported step type ` +
-          `"${child.uses}"`,
+      return executeAgentStep(runtime, child, {
+        kind: "loop-child",
+        loopId: loop.id,
       });
     case "approval":
       return failTechnically(runtime, {
@@ -507,6 +578,286 @@ async function evaluateStepWhen(
   }
 
   return true;
+}
+
+async function executeAgentStep(
+  runtime: ExecutionRuntime,
+  step: AgentStep,
+  scope: StepScope,
+): Promise<"completed"> {
+  let agentRuntime: AgentRuntime;
+  let command: Awaited<ReturnType<typeof loadCommand>>;
+  let configuration: ReturnType<typeof resolveAgentStepConfiguration>;
+  let completionSpec: ReturnType<typeof createAgentCompletionSpec>;
+  let prompt: string;
+
+  try {
+    if (runtime.agentRuntime === undefined) {
+      throw new ExecutionError(
+        `agent step "${step.id}" requires an AgentRuntime`,
+        { stepId: step.id },
+      );
+    }
+
+    if (runtime.commandsDir === undefined) {
+      throw new ExecutionError(
+        `agent step "${step.id}" requires a commands directory`,
+        { stepId: step.id },
+      );
+    }
+
+    agentRuntime = runtime.agentRuntime;
+    const commandPath = resolveAgentCommandPath(
+      runtime.commandsDir,
+      step.command,
+      step.id,
+    );
+    command = await loadCommand(commandPath);
+    configuration = resolveAgentStepConfiguration(
+      step,
+      command,
+      runtime.context.config,
+    );
+    completionSpec = createAgentCompletionSpec(step);
+    prompt = composeAgentPrompt(
+      command.prompt,
+      createExecutionTemplateContext(runtime.state, runtime.context),
+      completionSpec,
+    );
+  } catch (cause) {
+    const message =
+      cause instanceof ExecutionError
+        ? cause.message
+        : `agent step "${step.id}" setup failed: ${getErrorMessage(cause)}`;
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      cause,
+    });
+  }
+
+  const stepState = getStepState(runtime.state, step.id);
+
+  if (stepState === undefined) {
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message: `step "${step.id}" is missing from run state`,
+      markStep: false,
+    });
+  }
+
+  const attempt = stepState.attempt + 1;
+  const sessionLogPath = path.join(
+    getRunPaths(runtime.runsRoot, runtime.state.id).sessionsDir,
+    `${step.id}-${attempt}.jsonl`,
+  );
+  const startedAt = readClock(runtime.clock, runtime.state.id, step.id);
+  runtime.state = replaceStepState(runtime.state, step.id, {
+    status: "running",
+    attempt,
+    started_at: startedAt.toISOString(),
+  });
+  await persistRuntimeState(runtime, startedAt, step.id);
+
+  let result: AgentStepResult;
+
+  try {
+    result = await agentRuntime.runStep({
+      stepId: step.id,
+      prompt,
+      cwd: runtime.cwd,
+      ...(configuration.model === undefined
+        ? {}
+        : { model: configuration.model }),
+      ...(configuration.thinking === undefined
+        ? {}
+        : { thinking: configuration.thinking }),
+      tools: configuration.tools,
+      timeoutSeconds: configuration.timeoutSeconds,
+      sessionLogPath,
+      completion: {
+        expectedArtifacts: [...completionSpec.expectedArtifacts],
+      },
+    });
+  } catch (cause) {
+    const message =
+      `agent step "${step.id}" runtime threw: ` + getErrorMessage(cause);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      cause,
+    });
+  }
+
+  if (!result.success || result.timedOut) {
+    const detail =
+      result.error?.trim().length === 0 || result.error === undefined
+        ? undefined
+        : result.error;
+    const message = result.timedOut
+      ? `agent step "${step.id}" timed out` +
+        (detail === undefined ? "" : `: ${detail}`)
+      : `agent step "${step.id}" runtime failed` +
+        (detail === undefined ? "" : `: ${detail}`);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      stepPatch: {
+        output: formatAgentFailureOutput(result.finalText, message),
+      },
+    });
+  }
+
+  if (result.completionError !== undefined) {
+    const detail =
+      result.completionError.trim().length === 0
+        ? "unspecified completion protocol error"
+        : result.completionError;
+    const message =
+      `agent step "${step.id}" completion protocol failed: ${detail}`;
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      stepPatch: {
+        output: formatAgentFailureOutput(result.finalText, message),
+      },
+    });
+  }
+
+  if (result.completion === undefined) {
+    const message =
+      `agent step "${step.id}" completed without calling complete_step`;
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      stepPatch: {
+        output: formatAgentFailureOutput(result.finalText, message),
+      },
+    });
+  }
+
+  const validation = validateAgentCompletion(
+    result.completion,
+    completionSpec,
+  );
+
+  if (!validation.success) {
+    const message =
+      `agent step "${step.id}" returned invalid complete_step completion: ` +
+      validation.error;
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      stepPatch: {
+        output: formatAgentFailureOutput(result.finalText, message),
+      },
+    });
+  }
+
+  const completion = validation.completion;
+  let storedArtifactPath: string | undefined;
+
+  if (step.artifact !== undefined) {
+    const artifact = completion.artifacts.find(
+      (candidate) => candidate.name === step.artifact?.name,
+    );
+
+    if (artifact === undefined) {
+      const message =
+        `agent step "${step.id}" completion omitted artifact ` +
+        `"${step.artifact.name}"`;
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        stepPatch: {
+          output: formatAgentFailureOutput(result.finalText, message),
+        },
+      });
+    }
+
+    try {
+      const written = await writeArtifact({
+        runsRoot: runtime.runsRoot,
+        state: runtime.state,
+        name: step.artifact.name,
+        filename: step.artifact.filename,
+        versioned: step.artifact.versioned ?? false,
+        content: artifact.content,
+      });
+      runtime.state = written.state;
+      storedArtifactPath = written.path;
+      runtime.context = {
+        ...runtime.context,
+        artifacts: {
+          ...(runtime.context.artifacts ?? {}),
+          [step.artifact.name]: artifact.content,
+        },
+      };
+    } catch (cause) {
+      const message =
+        `agent step "${step.id}" could not persist artifact ` +
+        `"${step.artifact.name}": ${getErrorMessage(cause)}`;
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        cause,
+        stepPatch: {
+          output: formatAgentFailureOutput(result.finalText, message),
+        },
+      });
+    }
+  }
+
+  const completedAt = readClock(runtime.clock, runtime.state.id, step.id);
+  const runningState = getStepState(runtime.state, step.id);
+
+  if (runningState === undefined) {
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message: `step "${step.id}" is missing from run state after agent execution`,
+      markStep: false,
+    });
+  }
+
+  runtime.state = replaceStepState(runtime.state, step.id, {
+    status: "completed",
+    attempt: runningState.attempt,
+    ...(runningState.started_at === undefined
+      ? {}
+      : { started_at: runningState.started_at }),
+    completed_at: completedAt.toISOString(),
+    success: true,
+    summary: completion.summary,
+    ...(storedArtifactPath === undefined
+      ? {}
+      : { artifact: storedArtifactPath }),
+    ...(result.finalText.trim().length === 0
+      ? {}
+      : { output: result.finalText }),
+  });
+  await persistRuntimeState(runtime, completedAt, step.id);
+  return "completed";
+}
+
+function formatAgentFailureOutput(
+  finalText: string,
+  message: string,
+): string {
+  const error = `ERROR:\n${message}`;
+
+  return finalText.trim().length === 0
+    ? error
+    : `FINAL RESPONSE:\n${finalText}\n\n${error}`;
 }
 
 async function executeShellStep(

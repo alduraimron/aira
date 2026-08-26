@@ -1253,7 +1253,7 @@ describe("approval continuation", () => {
     expect((await loadRun(runsRoot, state.id)).status).toBe("failed");
   });
 
-  test("a revised run continues to the pending unsupported agent", async () => {
+  test("a revised run reaches the pending agent without incrementing setup attempts", async () => {
     const workflow: Workflow = {
       name: "approval-revise-continue",
       steps: [
@@ -1297,7 +1297,7 @@ describe("approval continuation", () => {
     );
     const persisted = await loadRun(runsRoot, state.id);
 
-    expect(error.message).toContain('uses unsupported step type "agent"');
+    expect(error.message).toContain('agent step "plan" requires an AgentRuntime');
     expect(persisted.status).toBe("failed");
     expect(persisted.current_step).toBe("plan");
     expect(persisted.steps.plan).toMatchObject({
@@ -1311,7 +1311,7 @@ describe("approval continuation", () => {
   });
 });
 
-describe("invalid execution state and unsupported steps", () => {
+describe("invalid execution state and agent dependencies", () => {
   const nonRunningStatuses: Exclude<RunStatus, "running">[] = [
     "waiting",
     "interrupted",
@@ -1439,19 +1439,19 @@ describe("invalid execution state and unsupported steps", () => {
     });
   });
 
-  const unsupportedWorkflows: Array<[string, Workflow]> = [
+  const agentWorkflows: Array<[string, Workflow]> = [
     [
       "agent",
       {
-        name: "unsupported-agent",
+        name: "agent-dependencies",
         steps: [{ id: "plan", uses: "agent", command: "plan" }],
       },
     ],
   ];
 
-  test.each(unsupportedWorkflows)(
-    "fails clearly for an unsupported %s step",
-    async (type, workflow) => {
+  test.each(agentWorkflows)(
+    "fails clearly when an %s step has no runtime dependency",
+    async (_type, workflow) => {
       const state = await createState(workflow);
       const error = await expectExecutionError(() =>
         executeWorkflow({
@@ -1466,12 +1466,12 @@ describe("invalid execution state and unsupported steps", () => {
       const stepId = workflow.steps[0]?.id;
 
       if (stepId === undefined) {
-        throw new Error("expected an unsupported step");
+        throw new Error("expected an agent step");
       }
 
       const persisted = await loadRun(runsRoot, state.id);
       expect(error.message).toContain(
-        `uses unsupported step type "${type}"`,
+        `agent step "${stepId}" requires an AgentRuntime`,
       );
       expect(persisted.status).toBe("failed");
       expect(persisted.current_step).toBe(stepId);

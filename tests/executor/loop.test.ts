@@ -1315,8 +1315,8 @@ describe("loop child state consistency", () => {
   });
 });
 
-describe("unsupported loop children", () => {
-  test("skips an unsupported agent child when its condition is false", async () => {
+describe("loop child dependencies and restrictions", () => {
+  test("skips a false agent child without requiring agent dependencies", async () => {
     const workflow: Workflow = {
       name: "unreached-agent-child",
       steps: [
@@ -1358,7 +1358,7 @@ describe("unsupported loop children", () => {
     });
   });
 
-  test("fails clearly when execution reaches an agent child", async () => {
+  test("fails clearly when an agent child has no runtime dependency", async () => {
     const workflow: Workflow = {
       name: "unsupported-agent-child",
       steps: [
@@ -1384,7 +1384,7 @@ describe("unsupported loop children", () => {
     const persisted = await loadRun(runsRoot, state.id);
 
     expect(error.message).toBe(
-      'step "repair" uses unsupported step type "agent"',
+      'agent step "repair" requires an AgentRuntime',
     );
     expect(error.stepId).toBe("repair");
     expect(persisted.status).toBe("failed");

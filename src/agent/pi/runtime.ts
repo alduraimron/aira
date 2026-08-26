@@ -10,6 +10,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import {
+  COMPLETE_STEP_TOOL_NAME,
+  getAgentCompletionSpecError,
+} from "../completion";
 import { AgentRuntimeError } from "../errors";
 import type { AgentRuntime } from "../runtime";
 import type { AgentStepRequest, AgentStepResult } from "../types";
@@ -18,6 +22,10 @@ import {
   type SessionAuditLog,
   type SessionAuditLogFactory,
 } from "./audit-log";
+import {
+  createCompleteStepTool,
+  type CompleteStepToolCapture,
+} from "./completion-tool";
 import {
   toAiraSessionEventRecord,
   updateAssistantSnapshot,
@@ -54,7 +62,7 @@ export interface PiSessionCreationOptions {
   model?: PiModel;
   thinkingLevel?: PiThinkingLevel;
   tools?: string[];
-  customTools?: ToolDefinition[];
+  customTools?: ToolDefinition<any, any>[];
 }
 
 export type PiSessionFactory = (
@@ -65,7 +73,7 @@ export interface PiRuntimeOptions {
   /** Reused across all sessions created by this runtime. */
   modelRuntime?: ModelRuntime;
   /** Small Phase 9 seam for Aira-owned custom tools. */
-  customTools?: ToolDefinition[];
+  customTools?: ToolDefinition<any, any>[];
   /** Narrow SDK seams used by unit tests. */
   sessionFactory?: PiSessionFactory;
   modelRuntimeFactory?: () => Promise<ModelRuntime>;
@@ -96,7 +104,7 @@ interface CleanupFailure {
 }
 
 export class PiRuntime implements AgentRuntime {
-  private readonly customTools?: ToolDefinition[];
+  private readonly customTools?: ToolDefinition<any, any>[];
   private readonly sessionFactory: PiSessionFactory;
   private readonly modelRuntimeFactory: () => Promise<ModelRuntime>;
   private readonly modelResolver: PiModelResolver;
@@ -118,7 +126,16 @@ export class PiRuntime implements AgentRuntime {
 
   async runStep(request: AgentStepRequest): Promise<AgentStepResult> {
     assertAgentStepRequest(request);
+    assertNoCompleteStepToolCollision(request, this.customTools);
 
+    const completionCapture =
+      request.completion === undefined
+        ? undefined
+        : createCompleteStepTool(request.completion);
+    const customTools =
+      completionCapture === undefined
+        ? this.customTools
+        : [...(this.customTools ?? []), completionCapture.tool];
     const requestedThinking = resolveRequestedThinking(request);
     const modelRuntime = await this.getModelRuntime(request.stepId);
     const { model, thinkingLevel } = this.resolveModel(
@@ -136,7 +153,7 @@ export class PiRuntime implements AgentRuntime {
         model,
         thinkingLevel,
         tools: request.tools,
-        customTools: this.customTools,
+        customTools,
       });
     } catch (cause) {
       throw new AgentRuntimeError(
@@ -150,7 +167,7 @@ export class PiRuntime implements AgentRuntime {
       );
     }
 
-    return await this.runSession(request, session);
+    return await this.runSession(request, session, completionCapture);
   }
 
   private async getModelRuntime(stepId: string): Promise<ModelRuntime> {
@@ -237,6 +254,7 @@ export class PiRuntime implements AgentRuntime {
   private async runSession(
     request: AgentStepRequest,
     session: PiSession,
+    completionCapture?: CompleteStepToolCapture,
   ): Promise<AgentStepResult> {
     let auditLog: SessionAuditLog | undefined;
     let unsubscribe: (() => void) | undefined;
@@ -262,6 +280,19 @@ export class PiRuntime implements AgentRuntime {
       }
 
       const listener: AgentSessionEventListener = (event) => {
+        if (
+          event.type === "tool_execution_start" &&
+          event.toolName === COMPLETE_STEP_TOOL_NAME
+        ) {
+          completionCapture?.recordInvocationStart(event.toolCallId);
+        } else if (
+          event.type === "tool_execution_end" &&
+          event.toolName === COMPLETE_STEP_TOOL_NAME &&
+          event.isError
+        ) {
+          completionCapture?.recordInvocationError(event.toolCallId);
+        }
+
         assistantSnapshot = updateAssistantSnapshot(assistantSnapshot, event);
         auditLog?.record(toAiraSessionEventRecord(event, timestamp()));
       };
@@ -322,6 +353,8 @@ export class PiRuntime implements AgentRuntime {
       } else {
         result = makeCompletedResult(request, session, assistantSnapshot);
       }
+
+      result = attachCompletionState(result, completionCapture);
 
       if (auditLog !== undefined) {
         auditLog.record({
@@ -519,6 +552,34 @@ function assertAgentStepRequest(request: AgentStepRequest): void {
       { kind: "invalid-request", stepId: request.stepId },
     );
   }
+
+  if (request.completion !== undefined) {
+    const completionSpecError = getAgentCompletionSpecError(request.completion);
+
+    if (completionSpecError !== undefined) {
+      throw new AgentRuntimeError(
+        `invalid completion specification for step "${request.stepId}": ` +
+          completionSpecError,
+        { kind: "invalid-request", stepId: request.stepId },
+      );
+    }
+  }
+}
+
+function assertNoCompleteStepToolCollision(
+  request: AgentStepRequest,
+  customTools: readonly ToolDefinition<any, any>[] | undefined,
+): void {
+  if (
+    customTools?.some((tool) => tool.name === COMPLETE_STEP_TOOL_NAME) !== true
+  ) {
+    return;
+  }
+
+  throw new AgentRuntimeError(
+    `custom tool name "${COMPLETE_STEP_TOOL_NAME}" is reserved by Aira`,
+    { kind: "invalid-request", stepId: request.stepId },
+  );
 }
 
 async function promptWithTimeout(
@@ -617,6 +678,27 @@ function makeCompletedResult(
     sessionId: session.sessionId,
     finalText,
     timedOut: false,
+  };
+}
+
+function attachCompletionState(
+  result: AgentStepResult,
+  capture: CompleteStepToolCapture | undefined,
+): AgentStepResult {
+  if (capture === undefined) {
+    return result;
+  }
+
+  const state = capture.getState();
+
+  return {
+    ...result,
+    ...(state.completion === undefined
+      ? {}
+      : { completion: state.completion }),
+    ...(state.completionError === undefined
+      ? {}
+      : { completionError: state.completionError }),
   };
 }
 

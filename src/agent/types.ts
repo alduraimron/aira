@@ -1,3 +1,5 @@
+import type { AgentCompletion, AgentCompletionSpec } from "./completion";
+
 export interface AgentStepRequest {
   stepId: string;
   prompt: string;
@@ -9,6 +11,8 @@ export interface AgentStepRequest {
   timeoutSeconds?: number;
   /** Optional Aira-owned JSONL audit log. */
   sessionLogPath?: string;
+  /** Enables Aira's provider-neutral semantic completion contract. */
+  completion?: AgentCompletionSpec;
 }
 
 export interface AgentStepResult {
@@ -22,4 +26,8 @@ export interface AgentStepResult {
   finalText: string;
   timedOut: boolean;
   error?: string;
+  /** Accepted semantic completion, independent from runtime success. */
+  completion?: AgentCompletion;
+  /** Semantic completion protocol failure, independent from runtime success. */
+  completionError?: string;
 }
