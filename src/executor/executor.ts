@@ -12,7 +12,12 @@ import type {
   ShellCommandResult,
 } from "../shell/types";
 import { interpolateTemplate } from "../template/interpolate";
-import type { ShellStep, Workflow } from "../workflow/types";
+import type {
+  LoopStep,
+  ShellStep,
+  Workflow,
+  WorkflowStep,
+} from "../workflow/types";
 import {
   createExecutionTemplateContext,
   type ExecutionContextInput,
@@ -59,40 +64,72 @@ interface RuntimeFailure {
   message: string;
 }
 
+interface ExecutionRuntime {
+  runsRoot: string;
+  context: ExecutionContextInput;
+  cwd: string;
+  shellTimeout?: number;
+  clock: () => Date;
+  shellRunner: ShellRunner;
+  state: RunState;
+}
+
+type StepOutcome = "completed" | "failed" | "skipped" | "waiting";
+
+type StepScope =
+  | { kind: "top-level" }
+  | { kind: "loop-child"; loopId: string };
+
+interface TechnicalFailureParams {
+  stepId: string;
+  message: string;
+  cause?: unknown;
+  parentLoopId?: string;
+  markStep?: boolean;
+  stepPatch?: Partial<StepState>;
+}
+
 const systemClock = () => new Date();
 
 export async function executeWorkflow(
   params: ExecuteWorkflowParams,
 ): Promise<RunState> {
-  const clock = params.now ?? systemClock;
-  const shellRunner = params.shellRunner ?? runShellCommand;
   const mode = params.mode ?? "fresh";
-  let state = params.state;
+  const runtime: ExecutionRuntime = {
+    runsRoot: params.runsRoot,
+    context: params.context,
+    cwd: params.cwd,
+    shellTimeout: params.shellTimeout,
+    clock: params.now ?? systemClock,
+    shellRunner: params.shellRunner ?? runShellCommand,
+    state: params.state,
+  };
 
   if (mode !== "fresh" && mode !== "continue") {
     throw new ExecutionError(`unsupported execution mode "${String(mode)}"`, {
-      runId: state.id,
+      runId: runtime.state.id,
     });
   }
 
-  if (state.status !== "running") {
+  if (runtime.state.status !== "running") {
     throw new ExecutionError(
-      `run "${state.id}" must have status "running" before execution; ` +
-        `found "${state.status}"`,
-      { runId: state.id },
+      `run "${runtime.state.id}" must have status "running" before execution; ` +
+        `found "${runtime.state.status}"`,
+      { runId: runtime.state.id },
     );
   }
 
-  if (state.workflow !== params.workflow.name) {
+  if (runtime.state.workflow !== params.workflow.name) {
     throw new ExecutionError(
-      `run "${state.id}" was created for workflow "${state.workflow}" but ` +
-        `executor received "${params.workflow.name}"`,
-      { runId: state.id },
+      `run "${runtime.state.id}" was created for workflow ` +
+        `"${runtime.state.workflow}" but executor received ` +
+        `"${params.workflow.name}"`,
+      { runId: runtime.state.id },
     );
   }
 
   for (const step of params.workflow.steps) {
-    const stepState = getStepState(state, step.id);
+    const stepState = getStepState(runtime.state, step.id);
 
     if (
       mode === "continue" &&
@@ -101,252 +138,508 @@ export async function executeWorkflow(
       continue;
     }
 
-    state = {
-      ...state,
+    runtime.state = {
+      ...runtime.state,
       current_step: step.id,
     };
 
     if (stepState === undefined) {
-      const message = `step "${step.id}" is missing from run state`;
-      state = setRunStatus(state, "failed");
-      const failedAt = readClock(clock, state.id, step.id);
-      await persistState(params.runsRoot, state, failedAt, step.id);
-      throw new ExecutionError(message, {
-        runId: state.id,
+      return failTechnically(runtime, {
         stepId: step.id,
+        message: `step "${step.id}" is missing from run state`,
+        markStep: false,
       });
     }
 
     if (stepState.status !== "pending") {
-      const message =
-        `step "${step.id}" must have status "pending" before execution; ` +
-        `found "${stepState.status}"`;
-      state = await persistStepFailure({
-        runsRoot: params.runsRoot,
-        state,
+      return failTechnically(runtime, {
         stepId: step.id,
-        message,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
+        message:
+          `step "${step.id}" must have status "pending" before execution; ` +
+          `found "${stepState.status}"`,
       });
     }
 
-    if (step.uses !== "shell" && step.uses !== "approval") {
-      const message =
-        `step "${step.id}" uses unsupported step type "${step.uses}"`;
-      state = await persistStepFailure({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        message,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
-      });
-    }
+    let outcome: StepOutcome;
 
-    if (step.when !== undefined) {
-      let shouldExecute: boolean;
-
-      try {
-        shouldExecute = evaluateCondition(
-          step.when,
-          createExecutionTemplateContext(state, params.context),
-        );
-      } catch (cause) {
-        const message =
-          `step "${step.id}" when condition failed: ` +
-          getErrorMessage(cause);
-        state = await persistStepFailure({
-          runsRoot: params.runsRoot,
-          state,
+    switch (step.uses) {
+      case "shell":
+      case "approval":
+        outcome = await executeTopLevelNonLoopStep(runtime, step);
+        break;
+      case "loop":
+        outcome = await executeLoopStep(runtime, step);
+        break;
+      case "agent":
+        return failTechnically(runtime, {
           stepId: step.id,
-          message,
-          clock,
+          message:
+            `step "${step.id}" uses unsupported step type ` +
+            `"${step.uses}"`,
         });
-        throw new ExecutionError(message, {
-          runId: state.id,
-          stepId: step.id,
-          cause,
+      default:
+        return failTechnically(runtime, {
+          stepId: (step as WorkflowStep).id,
+          message:
+            `step "${(step as WorkflowStep).id}" uses unsupported step ` +
+            `type "${String((step as WorkflowStep).uses)}"`,
         });
-      }
-
-      if (!shouldExecute) {
-        state = patchStepState(state, step.id, { status: "skipped" });
-        const skippedAt = readClock(clock, state.id, step.id);
-        await persistState(params.runsRoot, state, skippedAt, step.id);
-        continue;
-      }
     }
 
-    if (step.uses === "approval") {
-      state = patchStepState(state, step.id, { status: "waiting" });
-      state = setRunStatus(state, "waiting");
-      const waitingAt = readClock(clock, state.id, step.id);
-      await persistState(params.runsRoot, state, waitingAt, step.id);
-      return state;
-    }
-
-    let prepared: PreparedShellStep;
-
-    try {
-      prepared = prepareShellStep(
-        step,
-        createExecutionTemplateContext(state, params.context),
-      );
-    } catch (cause) {
-      const message =
-        cause instanceof ExecutionError
-          ? cause.message
-          : `step "${step.id}" shell command interpolation failed: ` +
-            getErrorMessage(cause);
-      state = await persistStepFailure({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        message,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
-        cause,
-      });
-    }
-
-    let timeout: number;
-
-    try {
-      timeout = resolveShellTimeout(step.timeout, params.shellTimeout);
-    } catch (cause) {
-      const message =
-        `step "${step.id}" shell timeout is invalid: ` +
-        getErrorMessage(cause);
-      state = await persistStepFailure({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        message,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
-        cause,
-      });
-    }
-
-    const startedAt = readClock(clock, state.id, step.id);
-    state = patchStepState(state, step.id, {
-      status: "running",
-      attempt: stepState.attempt + 1,
-      started_at: startedAt.toISOString(),
-      completed_at: undefined,
-      success: undefined,
-      exit_code: undefined,
-      output: undefined,
-    });
-    await persistState(params.runsRoot, state, startedAt, step.id);
-
-    if (prepared.multiCommand) {
-      const execution = await executeMultipleCommands({
-        commands: prepared.commands,
-        cwd: params.cwd,
-        timeout,
-        shellRunner,
-        stepId: step.id,
-      });
-      const aggregate = aggregateCommandResults(execution.commands);
-      state = await persistShellResult({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        result: aggregate,
-        clock,
-      });
-
-      if (execution.runtimeFailure !== undefined) {
-        throw new ExecutionError(execution.runtimeFailure.message, {
-          runId: state.id,
-          stepId: step.id,
-          cause: execution.runtimeFailure.cause,
-        });
-      }
-
-      if (!aggregate.success) {
-        return state;
-      }
-
-      continue;
-    }
-
-    const command = prepared.commands[0];
-
-    if (command === undefined) {
-      const message = `step "${step.id}" has no shell command to execute`;
-      state = await persistStepFailure({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        message,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
-      });
-    }
-
-    let result: ShellCommandResult;
-
-    try {
-      result = await shellRunner({
-        command: command.command,
-        cwd: params.cwd,
-        timeout,
-      });
-    } catch (cause) {
-      const detail = getErrorMessage(cause);
-      const message = `step "${step.id}" shell execution failed: ${detail}`;
-      result = makeRuntimeFailureResult(cause);
-      state = await persistShellResult({
-        runsRoot: params.runsRoot,
-        state,
-        stepId: step.id,
-        result,
-        clock,
-      });
-      throw new ExecutionError(message, {
-        runId: state.id,
-        stepId: step.id,
-        cause,
-      });
-    }
-
-    result = normalizeShellResult(result);
-    state = await persistShellResult({
-      runsRoot: params.runsRoot,
-      state,
-      stepId: step.id,
-      result,
-      clock,
-    });
-
-    if (!result.success) {
-      return state;
+    if (outcome === "waiting" || outcome === "failed") {
+      return runtime.state;
     }
   }
 
-  state = setRunStatus(state, "completed");
-  delete state.current_step;
-  const completedAt = readClock(clock, state.id);
-  await persistState(params.runsRoot, state, completedAt);
-  return state;
+  runtime.state = setRunStatus(runtime.state, "completed");
+  delete runtime.state.current_step;
+  const completedAt = readClock(runtime.clock, runtime.state.id);
+  await persistRuntimeState(runtime, completedAt);
+  return runtime.state;
+}
+
+async function executeTopLevelNonLoopStep(
+  runtime: ExecutionRuntime,
+  step: Extract<WorkflowStep, { uses: "shell" | "approval" }>,
+): Promise<StepOutcome> {
+  const shouldExecute = await evaluateStepWhen(runtime, step);
+
+  if (!shouldExecute) {
+    return "skipped";
+  }
+
+  if (step.uses === "approval") {
+    runtime.state = patchStepState(runtime.state, step.id, {
+      status: "waiting",
+    });
+    runtime.state = setRunStatus(runtime.state, "waiting");
+    const waitingAt = readClock(runtime.clock, runtime.state.id, step.id);
+    await persistRuntimeState(runtime, waitingAt, step.id);
+    return "waiting";
+  }
+
+  return executeShellStep(runtime, step, { kind: "top-level" });
+}
+
+async function executeLoopStep(
+  runtime: ExecutionRuntime,
+  loop: LoopStep,
+): Promise<StepOutcome> {
+  const shouldExecute = await evaluateStepWhen(runtime, loop);
+
+  if (!shouldExecute) {
+    return "skipped";
+  }
+
+  await validateInitialLoopChildren(runtime, loop);
+
+  const initialLoopState = getStepState(runtime.state, loop.id);
+
+  if (initialLoopState === undefined) {
+    return failTechnically(runtime, {
+      stepId: loop.id,
+      message: `loop step "${loop.id}" is missing from run state`,
+      markStep: false,
+    });
+  }
+
+  if (initialLoopState.attempt >= loop.max_attempts) {
+    return failTechnically(runtime, {
+      stepId: loop.id,
+      message:
+        `loop step "${loop.id}" cannot start with attempt ` +
+        `${initialLoopState.attempt}; max_attempts is ${loop.max_attempts}`,
+    });
+  }
+
+  while (true) {
+    await startLoopIteration(runtime, loop);
+
+    for (const child of loop.steps) {
+      await executeLoopChild(runtime, loop, child);
+    }
+
+    let satisfied: boolean;
+
+    try {
+      satisfied = evaluateCondition(
+        loop.until,
+        createExecutionTemplateContext(runtime.state, runtime.context),
+      );
+    } catch (cause) {
+      const message =
+        `loop step "${loop.id}" until condition failed: ` +
+        getErrorMessage(cause);
+      return failTechnically(runtime, {
+        stepId: loop.id,
+        message,
+        cause,
+      });
+    }
+
+    if (satisfied) {
+      const completedAt = readClock(
+        runtime.clock,
+        runtime.state.id,
+        loop.id,
+      );
+      runtime.state = patchStepState(runtime.state, loop.id, {
+        status: "completed",
+        success: true,
+        completed_at: completedAt.toISOString(),
+      });
+      await persistRuntimeState(runtime, completedAt, loop.id);
+      return "completed";
+    }
+
+    const loopState = getStepState(runtime.state, loop.id);
+
+    if (loopState === undefined) {
+      return failTechnically(runtime, {
+        stepId: loop.id,
+        message: `loop step "${loop.id}" is missing from run state`,
+        markStep: false,
+      });
+    }
+
+    if (loopState.attempt >= loop.max_attempts) {
+      const waitingAt = readClock(
+        runtime.clock,
+        runtime.state.id,
+        loop.id,
+      );
+      runtime.state = patchStepState(runtime.state, loop.id, {
+        status: "waiting",
+        success: false,
+        completed_at: undefined,
+      });
+      runtime.state = setRunStatus(runtime.state, "waiting");
+      await persistRuntimeState(runtime, waitingAt, loop.id);
+      return "waiting";
+    }
+
+    await resetLoopChildren(runtime, loop);
+  }
+}
+
+async function validateInitialLoopChildren(
+  runtime: ExecutionRuntime,
+  loop: LoopStep,
+): Promise<void> {
+  for (const child of loop.steps) {
+    const childState = getStepState(runtime.state, child.id);
+
+    if (childState === undefined) {
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          `child step "${child.id}" of loop "${loop.id}" is missing ` +
+          "from run state",
+        markStep: false,
+      });
+    }
+
+    if (childState.status !== "pending") {
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          `child step "${child.id}" of loop "${loop.id}" must have ` +
+          `status "pending" before initial execution; found ` +
+          `"${childState.status}"`,
+      });
+    }
+  }
+}
+
+async function startLoopIteration(
+  runtime: ExecutionRuntime,
+  loop: LoopStep,
+): Promise<void> {
+  const loopState = getStepState(runtime.state, loop.id);
+
+  if (loopState === undefined) {
+    return failTechnically(runtime, {
+      stepId: loop.id,
+      message: `loop step "${loop.id}" is missing from run state`,
+      markStep: false,
+    });
+  }
+
+  if (loopState.status !== "pending" && loopState.status !== "running") {
+    return failTechnically(runtime, {
+      stepId: loop.id,
+      message:
+        `loop step "${loop.id}" must be pending or running before an ` +
+        `iteration; found "${loopState.status}"`,
+    });
+  }
+
+  const startedAt = readClock(runtime.clock, runtime.state.id, loop.id);
+  const firstIteration = loopState.status === "pending";
+  const nextLoopState: StepState = {
+    status: "running",
+    attempt: loopState.attempt + 1,
+    started_at: firstIteration
+      ? startedAt.toISOString()
+      : (loopState.started_at ?? startedAt.toISOString()),
+  };
+
+  runtime.state = replaceStepState(
+    runtime.state,
+    loop.id,
+    nextLoopState,
+  );
+  await persistRuntimeState(runtime, startedAt, loop.id);
+}
+
+async function executeLoopChild(
+  runtime: ExecutionRuntime,
+  loop: LoopStep,
+  child: WorkflowStep,
+): Promise<StepOutcome> {
+  const childState = getStepState(runtime.state, child.id);
+
+  if (childState === undefined) {
+    return failTechnically(runtime, {
+      stepId: child.id,
+      parentLoopId: loop.id,
+      message:
+        `child step "${child.id}" of loop "${loop.id}" is missing ` +
+        "from run state",
+      markStep: false,
+    });
+  }
+
+  if (childState.status !== "pending") {
+    return failTechnically(runtime, {
+      stepId: child.id,
+      parentLoopId: loop.id,
+      message:
+        `child step "${child.id}" of loop "${loop.id}" must have ` +
+        `status "pending" before execution; found ` +
+        `"${childState.status}"`,
+    });
+  }
+
+  const shouldExecute = await evaluateStepWhen(runtime, child, loop.id);
+
+  if (!shouldExecute) {
+    return "skipped";
+  }
+
+  switch (child.uses) {
+    case "shell":
+      return executeShellStep(runtime, child, {
+        kind: "loop-child",
+        loopId: loop.id,
+      });
+    case "agent":
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          `step "${child.id}" uses unsupported step type ` +
+          `"${child.uses}"`,
+      });
+    case "approval":
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          "approval steps inside loops are not supported by the current " +
+          "runtime",
+      });
+    case "loop":
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          `step "${child.id}" uses unsupported nested step type ` +
+          `"${child.uses}"`,
+      });
+    default:
+      return failTechnically(runtime, {
+        stepId: (child as WorkflowStep).id,
+        parentLoopId: loop.id,
+        message:
+          `step "${(child as WorkflowStep).id}" uses unsupported step ` +
+          `type "${String((child as WorkflowStep).uses)}"`,
+      });
+  }
+}
+
+async function evaluateStepWhen(
+  runtime: ExecutionRuntime,
+  step: WorkflowStep,
+  parentLoopId?: string,
+): Promise<boolean> {
+  if (step.when === undefined) {
+    return true;
+  }
+
+  let shouldExecute: boolean;
+
+  try {
+    shouldExecute = evaluateCondition(
+      step.when,
+      createExecutionTemplateContext(runtime.state, runtime.context),
+    );
+  } catch (cause) {
+    const message =
+      `step "${step.id}" when condition failed: ` + getErrorMessage(cause);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId,
+      message,
+      cause,
+    });
+  }
+
+  if (!shouldExecute) {
+    runtime.state = patchStepState(runtime.state, step.id, {
+      status: "skipped",
+    });
+    const skippedAt = readClock(runtime.clock, runtime.state.id, step.id);
+    await persistRuntimeState(runtime, skippedAt, step.id);
+    return false;
+  }
+
+  return true;
+}
+
+async function executeShellStep(
+  runtime: ExecutionRuntime,
+  step: ShellStep,
+  scope: StepScope,
+): Promise<Extract<StepOutcome, "completed" | "failed">> {
+  let prepared: PreparedShellStep;
+
+  try {
+    prepared = prepareShellStep(
+      step,
+      createExecutionTemplateContext(runtime.state, runtime.context),
+    );
+  } catch (cause) {
+    const message =
+      cause instanceof ExecutionError
+        ? cause.message
+        : `step "${step.id}" shell command interpolation failed: ` +
+          getErrorMessage(cause);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      cause,
+    });
+  }
+
+  let timeout: number;
+
+  try {
+    timeout = resolveShellTimeout(step.timeout, runtime.shellTimeout);
+  } catch (cause) {
+    const message =
+      `step "${step.id}" shell timeout is invalid: ` +
+      getErrorMessage(cause);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      cause,
+    });
+  }
+
+  const stepState = getStepState(runtime.state, step.id);
+
+  if (stepState === undefined) {
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message: `step "${step.id}" is missing from run state`,
+      markStep: false,
+    });
+  }
+
+  const startedAt = readClock(runtime.clock, runtime.state.id, step.id);
+  runtime.state = patchStepState(runtime.state, step.id, {
+    status: "running",
+    attempt: stepState.attempt + 1,
+    started_at: startedAt.toISOString(),
+    completed_at: undefined,
+    success: undefined,
+    exit_code: undefined,
+    output: undefined,
+  });
+  await persistRuntimeState(runtime, startedAt, step.id);
+
+  if (prepared.multiCommand) {
+    const execution = await executeMultipleCommands({
+      commands: prepared.commands,
+      cwd: runtime.cwd,
+      timeout,
+      shellRunner: runtime.shellRunner,
+      stepId: step.id,
+    });
+    const aggregate = aggregateCommandResults(execution.commands);
+
+    if (execution.runtimeFailure !== undefined) {
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message: execution.runtimeFailure.message,
+        cause: execution.runtimeFailure.cause,
+        stepPatch: {
+          exit_code: aggregate.exitCode,
+          output: aggregate.output,
+        },
+      });
+    }
+
+    return persistShellResult(runtime, step.id, aggregate, scope);
+  }
+
+  const command = prepared.commands[0];
+
+  if (command === undefined) {
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message: `step "${step.id}" has no shell command to execute`,
+    });
+  }
+
+  let result: ShellCommandResult;
+
+  try {
+    result = await runtime.shellRunner({
+      command: command.command,
+      cwd: runtime.cwd,
+      timeout,
+    });
+  } catch (cause) {
+    const detail = getErrorMessage(cause);
+    const message = `step "${step.id}" shell execution failed: ${detail}`;
+    result = makeRuntimeFailureResult(cause);
+    return failTechnically(runtime, {
+      stepId: step.id,
+      parentLoopId: getParentLoopId(scope),
+      message,
+      cause,
+      stepPatch: {
+        exit_code: result.exitCode,
+        output: result.output,
+      },
+    });
+  }
+
+  return persistShellResult(
+    runtime,
+    step.id,
+    normalizeShellResult(result),
+    scope,
+  );
 }
 
 function prepareShellStep(
@@ -507,64 +800,144 @@ function appendError(output: string, message: string): string {
   return `${output}\n\nERROR:\n${message}`;
 }
 
-async function persistShellResult(params: {
-  runsRoot: string;
-  state: RunState;
-  stepId: string;
-  result: ShellCommandResult;
-  clock: () => Date;
-}): Promise<RunState> {
-  const completedAt = readClock(params.clock, params.state.id, params.stepId);
-  let state = patchStepState(params.state, params.stepId, {
-    status: params.result.success ? "completed" : "failed",
+async function persistShellResult(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  result: ShellCommandResult,
+  scope: StepScope,
+): Promise<Extract<StepOutcome, "completed" | "failed">> {
+  const completedAt = readClock(runtime.clock, runtime.state.id, stepId);
+  runtime.state = patchStepState(runtime.state, stepId, {
+    status: result.success ? "completed" : "failed",
     completed_at: completedAt.toISOString(),
-    success: params.result.success,
-    exit_code: params.result.exitCode,
-    output: params.result.output,
+    success: result.success,
+    exit_code: result.exitCode,
+    output: result.output,
   });
 
-  if (!params.result.success) {
-    state = setRunStatus(state, "failed");
+  if (!result.success && scope.kind === "top-level") {
+    runtime.state = setRunStatus(runtime.state, "failed");
   }
 
-  await persistState(params.runsRoot, state, completedAt, params.stepId);
-  return state;
+  await persistRuntimeState(runtime, completedAt, stepId);
+  return result.success ? "completed" : "failed";
 }
 
-async function persistStepFailure(params: {
-  runsRoot: string;
-  state: RunState;
-  stepId: string;
-  message: string;
-  clock: () => Date;
-}): Promise<RunState> {
-  const completedAt = readClock(params.clock, params.state.id, params.stepId);
-  let state = patchStepState(params.state, params.stepId, {
-    status: "failed",
-    completed_at: completedAt.toISOString(),
-    success: false,
-    exit_code: undefined,
-    output: `ERROR:\n${params.message}`,
-  });
+async function resetLoopChildren(
+  runtime: ExecutionRuntime,
+  loop: LoopStep,
+): Promise<void> {
+  const nextSteps = { ...runtime.state.steps };
+
+  for (const child of loop.steps) {
+    const childState = getStepState(runtime.state, child.id);
+
+    if (childState === undefined) {
+      return failTechnically(runtime, {
+        stepId: child.id,
+        parentLoopId: loop.id,
+        message:
+          `child step "${child.id}" of loop "${loop.id}" is missing ` +
+          "from run state during replay reset",
+        markStep: false,
+      });
+    }
+
+    nextSteps[child.id] = {
+      status: "pending",
+      attempt: childState.attempt,
+    };
+  }
+
+  runtime.state = {
+    ...runtime.state,
+    steps: nextSteps,
+  };
+  const resetAt = readClock(runtime.clock, runtime.state.id, loop.id);
+  await persistRuntimeState(runtime, resetAt, loop.id);
+}
+
+async function failTechnically(
+  runtime: ExecutionRuntime,
+  params: TechnicalFailureParams,
+): Promise<never> {
+  const failedAt = readClock(
+    runtime.clock,
+    runtime.state.id,
+    params.stepId,
+  );
+  let state = runtime.state;
+  const stepState = getStepState(state, params.stepId);
+
+  if (params.markStep !== false && stepState !== undefined) {
+    state = patchStepState(state, params.stepId, {
+      status: "failed",
+      completed_at: failedAt.toISOString(),
+      success: false,
+      exit_code: undefined,
+      output: `ERROR:\n${params.message}`,
+      ...params.stepPatch,
+    });
+  }
+
+  if (
+    params.parentLoopId !== undefined &&
+    params.parentLoopId !== params.stepId
+  ) {
+    const loopState = getStepState(state, params.parentLoopId);
+
+    if (loopState !== undefined) {
+      state = patchStepState(state, params.parentLoopId, {
+        status: "failed",
+        completed_at: failedAt.toISOString(),
+        success: false,
+        exit_code: undefined,
+        output: `ERROR:\n${params.message}`,
+      });
+    }
+  }
+
   state = setRunStatus(state, "failed");
-  await persistState(params.runsRoot, state, completedAt, params.stepId);
-  return state;
+  runtime.state = state;
+  await persistRuntimeState(runtime, failedAt, params.stepId);
+  throw new ExecutionError(params.message, {
+    runId: runtime.state.id,
+    stepId: params.stepId,
+    cause: params.cause,
+  });
 }
 
-async function persistState(
-  runsRoot: string,
-  state: RunState,
+async function persistRuntimeState(
+  runtime: ExecutionRuntime,
   now: Date,
   stepId?: string,
 ): Promise<void> {
   try {
-    await saveRun(runsRoot, state, now);
+    await saveRun(runtime.runsRoot, runtime.state, now);
   } catch (cause) {
     throw new ExecutionError(
-      `could not persist run "${state.id}": ${getErrorMessage(cause)}`,
-      { runId: state.id, stepId, cause },
+      `could not persist run "${runtime.state.id}": ${getErrorMessage(cause)}`,
+      { runId: runtime.state.id, stepId, cause },
     );
   }
+}
+
+function replaceStepState(
+  state: RunState,
+  stepId: string,
+  stepState: StepState,
+): RunState {
+  return {
+    ...state,
+    steps: {
+      ...state.steps,
+      [stepId]: stepState,
+    },
+  };
+}
+
+function getParentLoopId(scope: StepScope): string | undefined {
+  return scope.kind === "loop-child" ? scope.loopId : undefined;
 }
 
 function getStepState(

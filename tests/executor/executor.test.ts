@@ -1447,21 +1447,6 @@ describe("invalid execution state and unsupported steps", () => {
         steps: [{ id: "plan", uses: "agent", command: "plan" }],
       },
     ],
-    [
-      "loop",
-      {
-        name: "unsupported-loop",
-        steps: [
-          {
-            id: "verify-loop",
-            uses: "loop",
-            max_attempts: 2,
-            until: "steps.test.success == true",
-            steps: [{ id: "test", uses: "shell", run: "test" }],
-          },
-        ],
-      },
-    ],
   ];
 
   test.each(unsupportedWorkflows)(
