@@ -83,6 +83,51 @@ describe("workflow schema", () => {
     });
   });
 
+  test("rejects an unknown top-level workflow property", () => {
+    expect(
+      workflowSchema.safeParse({
+        ...minimalWorkflow,
+        unexpected: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects an unknown agent step property", () => {
+    expect(
+      workflowSchema.safeParse({
+        name: "feature",
+        steps: [
+          {
+            id: "plan",
+            uses: "agent",
+            command: "plan",
+            unexpected: true,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  test("rejects an unknown artifact property", () => {
+    expect(
+      workflowSchema.safeParse({
+        name: "feature",
+        steps: [
+          {
+            id: "plan",
+            uses: "agent",
+            command: "plan",
+            artifact: {
+              name: "plan",
+              filename: "plan.md",
+              unexpected: true,
+            },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   test("accepts a shell step with one run command", () => {
     expect(
       workflowSchema.safeParse({

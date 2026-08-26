@@ -23,7 +23,7 @@ function getValidationError(document: unknown): WorkflowValidationError {
 }
 
 describe("semantic workflow validation", () => {
-  test("accepts an approval that references an agent and its artifact", () => {
+  test("accepts an approval referencing a previous agent and artifact in the same top-level block", () => {
     expect(() =>
       validateDocument({
         name: "feature",
@@ -44,6 +44,39 @@ describe("semantic workflow validation", () => {
             artifact: "plan",
             revise: "plan",
             message: "Approve the plan?",
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  test("accepts an approval referencing a previous agent and artifact in the same loop", () => {
+    expect(() =>
+      validateDocument({
+        name: "repair-cycle",
+        steps: [
+          {
+            id: "cycle",
+            uses: "loop",
+            max_attempts: 2,
+            until: "steps.repair.success == true",
+            steps: [
+              {
+                id: "repair",
+                uses: "agent",
+                command: "repair",
+                artifact: {
+                  name: "repair-report",
+                  filename: "repair.md",
+                },
+              },
+              {
+                id: "approve-repair",
+                uses: "approval",
+                revise: "repair",
+                artifact: "repair-report",
+              },
+            ],
           },
         ],
       }),
@@ -137,6 +170,139 @@ describe("semantic workflow validation", () => {
 
     expect(error.message).toContain("nested loops are not allowed");
     expect(error.message).toContain('loop "outer"');
+  });
+
+  test("rejects approval revise references to a future top-level agent", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        { id: "approve-plan", uses: "approval", revise: "plan" },
+        { id: "plan", uses: "agent", command: "plan" },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent step "plan" is not available before this approval in the same sequential block',
+    );
+  });
+
+  test("rejects approval artifact references to a future top-level artifact", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        { id: "approve-plan", uses: "approval", artifact: "plan" },
+        {
+          id: "plan",
+          uses: "agent",
+          command: "plan",
+          artifact: { name: "plan", filename: "plan.md" },
+        },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent artifact "plan" is not available before this approval in the same sequential block',
+    );
+  });
+
+  test("rejects a top-level approval referencing an agent inside a loop", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        {
+          id: "cycle",
+          uses: "loop",
+          max_attempts: 2,
+          until: "steps.repair.success == true",
+          steps: [{ id: "repair", uses: "agent", command: "repair" }],
+        },
+        { id: "approve-repair", uses: "approval", revise: "repair" },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent step "repair" is not available before this approval in the same sequential block',
+    );
+  });
+
+  test("rejects a top-level approval referencing an artifact inside a loop", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        {
+          id: "cycle",
+          uses: "loop",
+          max_attempts: 2,
+          until: "steps.repair.success == true",
+          steps: [
+            {
+              id: "repair",
+              uses: "agent",
+              command: "repair",
+              artifact: { name: "repair-report", filename: "repair.md" },
+            },
+          ],
+        },
+        {
+          id: "approve-repair",
+          uses: "approval",
+          artifact: "repair-report",
+        },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent artifact "repair-report" is not available before this approval in the same sequential block',
+    );
+  });
+
+  test("rejects an approval inside a loop referencing a top-level agent", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        { id: "plan", uses: "agent", command: "plan" },
+        {
+          id: "cycle",
+          uses: "loop",
+          max_attempts: 2,
+          until: "steps.approve-plan.success == true",
+          steps: [
+            { id: "approve-plan", uses: "approval", revise: "plan" },
+          ],
+        },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent step "plan" is not available before this approval in the same sequential block',
+    );
+  });
+
+  test("rejects an approval inside a loop referencing a top-level artifact", () => {
+    const error = getValidationError({
+      name: "feature",
+      steps: [
+        {
+          id: "plan",
+          uses: "agent",
+          command: "plan",
+          artifact: { name: "plan", filename: "plan.md" },
+        },
+        {
+          id: "cycle",
+          uses: "loop",
+          max_attempts: 2,
+          until: "steps.approve-plan.success == true",
+          steps: [
+            { id: "approve-plan", uses: "approval", artifact: "plan" },
+          ],
+        },
+      ],
+    });
+
+    expect(error.message).toContain(
+      'agent artifact "plan" is not available before this approval in the same sequential block',
+    );
   });
 
   test("rejects approval revise references to a missing step", () => {

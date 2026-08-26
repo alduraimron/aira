@@ -1,11 +1,6 @@
 import path from "node:path";
 
-import type {
-  AgentStep,
-  ApprovalStep,
-  Workflow,
-  WorkflowStep,
-} from "./types";
+import type { AgentStep, Workflow, WorkflowStep } from "./types";
 
 export const WORKFLOW_IDENTIFIER_PATTERN = /^[a-z][a-z0-9-]*$/;
 
@@ -41,11 +36,6 @@ interface LocatedStep {
   step: WorkflowStep;
 }
 
-interface LocatedApproval {
-  path: string;
-  step: ApprovalStep;
-}
-
 interface LocatedArtifact {
   path: string;
   step: AgentStep;
@@ -55,7 +45,6 @@ export function validateWorkflow(workflow: Workflow, filePath?: string): Workflo
   const issues: WorkflowValidationIssue[] = [];
   const stepsById = new Map<string, LocatedStep>();
   const artifactsByName = new Map<string, LocatedArtifact>();
-  const approvals: LocatedApproval[] = [];
 
   const addIssue = (issue: WorkflowValidationIssue) => {
     issues.push(issue);
@@ -177,10 +166,6 @@ export function validateWorkflow(workflow: Workflow, filePath?: string): Workflo
         }
       }
 
-      if (step.uses === "approval") {
-        approvals.push({ path: stepPath, step });
-      }
-
       if (step.uses === "loop") {
         if (parentLoopId !== undefined) {
           addIssue({
@@ -207,39 +192,80 @@ export function validateWorkflow(workflow: Workflow, filePath?: string): Workflo
 
   visitSteps(workflow.steps, "steps");
 
-  for (const { path: approvalPath, step: approval } of approvals) {
-    if (approval.revise !== undefined) {
-      const revisedStep = stepsById.get(approval.revise)?.step;
+  const validateApprovalReferences = (
+    steps: WorkflowStep[],
+    pathPrefix: string,
+  ) => {
+    const precedingAgentIds = new Set<string>();
+    const precedingArtifactNames = new Set<string>();
 
-      if (!revisedStep) {
-        addIssue({
-          path: `${approvalPath}.revise`,
-          stepId: approval.id,
-          message: `revise references missing step "${approval.revise}"`,
-        });
-      } else if (revisedStep.uses !== "agent") {
-        addIssue({
-          path: `${approvalPath}.revise`,
-          stepId: approval.id,
-          message:
-            `revise must reference an agent step; "${approval.revise}" uses ` +
-            `"${revisedStep.uses}"`,
-        });
+    for (const [index, step] of steps.entries()) {
+      const stepPath = `${pathPrefix}[${index}]`;
+
+      if (step.uses === "approval") {
+        if (step.revise !== undefined) {
+          const revisedStep = stepsById.get(step.revise)?.step;
+
+          if (!revisedStep) {
+            addIssue({
+              path: `${stepPath}.revise`,
+              stepId: step.id,
+              message: `revise references missing step "${step.revise}"`,
+            });
+          } else if (revisedStep.uses !== "agent") {
+            addIssue({
+              path: `${stepPath}.revise`,
+              stepId: step.id,
+              message:
+                `revise must reference an agent step; "${step.revise}" uses ` +
+                `"${revisedStep.uses}"`,
+            });
+          } else if (!precedingAgentIds.has(step.revise)) {
+            addIssue({
+              path: `${stepPath}.revise`,
+              stepId: step.id,
+              message:
+                `agent step "${step.revise}" is not available before this ` +
+                "approval in the same sequential block",
+            });
+          }
+        }
+
+        if (step.artifact !== undefined) {
+          if (!artifactsByName.has(step.artifact)) {
+            addIssue({
+              path: `${stepPath}.artifact`,
+              stepId: step.id,
+              message:
+                `artifact references missing agent artifact "${step.artifact}"`,
+            });
+          } else if (!precedingArtifactNames.has(step.artifact)) {
+            addIssue({
+              path: `${stepPath}.artifact`,
+              stepId: step.id,
+              message:
+                `agent artifact "${step.artifact}" is not available before this ` +
+                "approval in the same sequential block",
+            });
+          }
+        }
+      }
+
+      if (step.uses === "agent") {
+        precedingAgentIds.add(step.id);
+
+        if (step.artifact) {
+          precedingArtifactNames.add(step.artifact.name);
+        }
+      }
+
+      if (step.uses === "loop") {
+        validateApprovalReferences(step.steps, `${stepPath}.steps`);
       }
     }
+  };
 
-    if (
-      approval.artifact !== undefined &&
-      !artifactsByName.has(approval.artifact)
-    ) {
-      addIssue({
-        path: `${approvalPath}.artifact`,
-        stepId: approval.id,
-        message:
-          `artifact references missing agent artifact "${approval.artifact}"`,
-      });
-    }
-  }
+  validateApprovalReferences(workflow.steps, "steps");
 
   if (issues.length > 0) {
     throw new WorkflowValidationError(issues, filePath);
