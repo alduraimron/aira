@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { applyApprovalDecision } from "../../src/approval";
 import {
   createExecutionTemplateContext,
   executeWorkflow,
@@ -452,6 +453,168 @@ describe("when conditions", () => {
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.broken?.status).toBe("failed");
   });
+});
+
+describe("approval step boundary", () => {
+  test("persists waiting state and returns before later steps execute", async () => {
+    const workflow: Workflow = {
+      name: "approval-boundary",
+      steps: [
+        { id: "shell-a", uses: "shell", run: "shell a" },
+        {
+          id: "approve-plan",
+          uses: "approval",
+          message: "Approve this implementation plan?",
+        },
+        { id: "shell-b", uses: "shell", run: "shell b" },
+      ],
+    };
+    const state = await createState(workflow);
+    const calls: string[] = [];
+    const waiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: emptyContext,
+      cwd,
+      now: tickingClock(),
+      shellRunner: async ({ command }) => {
+        calls.push(command);
+        return makeResult();
+      },
+    });
+    const persisted = await loadRun(runsRoot, state.id);
+
+    expect(calls).toEqual(["shell a"]);
+    expect(waiting.status).toBe("waiting");
+    expect(waiting.current_step).toBe("approve-plan");
+    expect(waiting.steps["approve-plan"]).toEqual({
+      status: "waiting",
+      attempt: 0,
+    });
+    expect(waiting.steps["shell-b"]).toEqual({
+      status: "pending",
+      attempt: 0,
+    });
+    expect(waiting.updated_at).toBe("2026-08-26T11:00:02.000Z");
+    expect(persisted).toEqual(waiting);
+  });
+
+  test("waits when an approval condition is true", async () => {
+    const workflow: Workflow = {
+      name: "approval-condition-true",
+      steps: [
+        {
+          id: "approve",
+          uses: "approval",
+          when: "input.enabled == true",
+        },
+      ],
+    };
+    const state = await createState(workflow, { enabled: true });
+    const waiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: emptyContext,
+      cwd,
+    });
+
+    expect(waiting.status).toBe("waiting");
+    expect(waiting.current_step).toBe("approve");
+    expect(waiting.steps.approve).toEqual({
+      status: "waiting",
+      attempt: 0,
+    });
+    expect(await loadRun(runsRoot, state.id)).toEqual(waiting);
+  });
+
+  test("skips a false approval condition without incrementing attempt", async () => {
+    const workflow: Workflow = {
+      name: "approval-condition-false",
+      steps: [
+        {
+          id: "approve",
+          uses: "approval",
+          when: "input.enabled == true",
+        },
+        { id: "later", uses: "shell", run: "later" },
+      ],
+    };
+    const state = await createState(workflow, { enabled: false });
+    const calls: string[] = [];
+    const finalState = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: emptyContext,
+      cwd,
+      shellRunner: async ({ command }) => {
+        calls.push(command);
+        return makeResult();
+      },
+    });
+
+    expect(calls).toEqual(["later"]);
+    expect(finalState.steps.approve).toEqual({
+      status: "skipped",
+      attempt: 0,
+    });
+    expect(finalState.steps.later?.status).toBe("completed");
+    expect(finalState.status).toBe("completed");
+    expect(await loadRun(runsRoot, state.id)).toEqual(finalState);
+  });
+
+  test.each([
+    ["an invalid expression", "input.enabled", "explicit comparison"],
+    [
+      "a missing reference",
+      "steps.missing.success == true",
+      'condition reference "steps.missing.success" was not found',
+    ],
+  ] as const)(
+    "fails and persists %s in an approval condition",
+    async (_label, when, expectedMessage) => {
+      const workflow: Workflow = {
+        name: "approval-condition-error",
+        steps: [
+          { id: "approve", uses: "approval", when },
+          { id: "later", uses: "shell", run: "later" },
+        ],
+      };
+      const state = await createState(workflow, { enabled: true });
+      let shellCalled = false;
+      const error = await expectExecutionError(() =>
+        executeWorkflow({
+          workflow,
+          runsRoot,
+          state,
+          context: emptyContext,
+          cwd,
+          shellRunner: async () => {
+            shellCalled = true;
+            return makeResult();
+          },
+        }),
+      );
+      const persisted = await loadRun(runsRoot, state.id);
+
+      expect(error.message).toContain("when condition failed");
+      expect(error.message).toContain(expectedMessage);
+      expect(shellCalled).toBe(false);
+      expect(persisted.status).toBe("failed");
+      expect(persisted.current_step).toBe("approve");
+      expect(persisted.steps.approve).toMatchObject({
+        status: "failed",
+        attempt: 0,
+        success: false,
+      });
+      expect(persisted.steps.later).toEqual({
+        status: "pending",
+        attempt: 0,
+      });
+    },
+  );
 });
 
 describe("shell command interpolation", () => {
@@ -979,6 +1142,175 @@ describe("timeout precedence", () => {
   );
 });
 
+describe("approval continuation", () => {
+  test("continues after approval without rerunning completed steps", async () => {
+    const workflow: Workflow = {
+      name: "approval-continue",
+      steps: [
+        { id: "shell-a", uses: "shell", run: "shell a" },
+        { id: "approve", uses: "approval" },
+        { id: "shell-b", uses: "shell", run: "shell b" },
+      ],
+    };
+    const state = await createState(workflow);
+    const calls: string[] = [];
+    const shellRunner: ShellRunner = async ({ command }) => {
+      calls.push(command);
+      return makeResult();
+    };
+    const waiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: emptyContext,
+      cwd,
+      shellRunner,
+    });
+    const approved = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state: waiting,
+      stepId: "approve",
+      decision: "approve",
+      now: () => new Date("2026-08-26T11:30:00.000Z"),
+    });
+
+    expect(calls).toEqual(["shell a"]);
+    expect(approved.status).toBe("running");
+    expect(approved.steps["shell-b"]?.status).toBe("pending");
+
+    const finalState = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state: approved,
+      context: emptyContext,
+      cwd,
+      mode: "continue",
+      shellRunner,
+      now: tickingClock("2026-08-26T12:00:00.000Z"),
+    });
+
+    expect(calls).toEqual(["shell a", "shell b"]);
+    expect(finalState.status).toBe("completed");
+    expect(finalState.current_step).toBeUndefined();
+    expect(finalState.steps["shell-a"]?.attempt).toBe(1);
+    expect(finalState.steps.approve).toMatchObject({
+      status: "completed",
+      attempt: 0,
+      result: "approved",
+    });
+    expect(finalState.steps["shell-b"]).toMatchObject({
+      status: "completed",
+      attempt: 1,
+    });
+    expect(await loadRun(runsRoot, state.id)).toEqual(finalState);
+  });
+
+  test("fresh mode rejects a partially completed approved run", async () => {
+    const workflow: Workflow = {
+      name: "approval-fresh-strict",
+      steps: [
+        { id: "shell-a", uses: "shell", run: "shell a" },
+        { id: "approve", uses: "approval" },
+        { id: "shell-b", uses: "shell", run: "shell b" },
+      ],
+    };
+    const state = await createState(workflow);
+    const calls: string[] = [];
+    const shellRunner: ShellRunner = async ({ command }) => {
+      calls.push(command);
+      return makeResult();
+    };
+    const waiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: emptyContext,
+      cwd,
+      shellRunner,
+    });
+    const approved = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state: waiting,
+      stepId: "approve",
+      decision: "approve",
+    });
+    const error = await expectExecutionError(() =>
+      executeWorkflow({
+        workflow,
+        runsRoot,
+        state: approved,
+        context: emptyContext,
+        cwd,
+        shellRunner,
+      }),
+    );
+
+    expect(error.message).toContain('step "shell-a" must have status "pending"');
+    expect(error.message).toContain('found "completed"');
+    expect(calls).toEqual(["shell a"]);
+    expect((await loadRun(runsRoot, state.id)).status).toBe("failed");
+  });
+
+  test("a revised run continues to the pending unsupported agent", async () => {
+    const workflow: Workflow = {
+      name: "approval-revise-continue",
+      steps: [
+        { id: "plan", uses: "agent", command: "plan" },
+        { id: "approve", uses: "approval", revise: "plan" },
+      ],
+    };
+    let state = await createState(workflow);
+    state = patchStepState(state, "plan", {
+      status: "completed",
+      attempt: 2,
+      started_at: "2026-08-26T10:56:00.000Z",
+      completed_at: "2026-08-26T10:57:00.000Z",
+      success: true,
+      output: "old plan",
+    });
+    state = patchStepState(state, "approve", { status: "waiting" });
+    state = {
+      ...state,
+      status: "waiting",
+      current_step: "approve",
+    };
+    await saveRun(runsRoot, state);
+
+    const revised = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state,
+      stepId: "approve",
+      decision: "revise",
+    });
+    const error = await expectExecutionError(() =>
+      executeWorkflow({
+        workflow,
+        runsRoot,
+        state: revised,
+        context: emptyContext,
+        cwd,
+        mode: "continue",
+      }),
+    );
+    const persisted = await loadRun(runsRoot, state.id);
+
+    expect(error.message).toContain('uses unsupported step type "agent"');
+    expect(persisted.status).toBe("failed");
+    expect(persisted.current_step).toBe("plan");
+    expect(persisted.steps.plan).toMatchObject({
+      status: "failed",
+      attempt: 2,
+    });
+    expect(persisted.steps.approve).toEqual({
+      status: "pending",
+      attempt: 0,
+    });
+  });
+});
+
 describe("invalid execution state and unsupported steps", () => {
   const nonRunningStatuses: Exclude<RunStatus, "running">[] = [
     "waiting",
@@ -1116,13 +1448,6 @@ describe("invalid execution state and unsupported steps", () => {
       },
     ],
     [
-      "approval",
-      {
-        name: "unsupported-approval",
-        steps: [{ id: "approve", uses: "approval" }],
-      },
-    ],
-    [
       "loop",
       {
         name: "unsupported-loop",
@@ -1161,7 +1486,7 @@ describe("invalid execution state and unsupported steps", () => {
 
       const persisted = await loadRun(runsRoot, state.id);
       expect(error.message).toContain(
-        `uses unsupported Phase 5 step type "${type}"`,
+        `uses unsupported step type "${type}"`,
       );
       expect(persisted.status).toBe("failed");
       expect(persisted.current_step).toBe(stepId);

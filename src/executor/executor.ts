@@ -23,6 +23,8 @@ export type ShellRunner = (
   params: RunShellCommandParams,
 ) => Promise<ShellCommandResult>;
 
+export type ExecutionMode = "fresh" | "continue";
+
 export interface ExecuteWorkflowParams {
   workflow: Workflow;
   runsRoot: string;
@@ -31,6 +33,8 @@ export interface ExecuteWorkflowParams {
   cwd: string;
   /** Caller-resolved default timeout in seconds. */
   shellTimeout?: number;
+  /** Defaults to strict fresh execution. */
+  mode?: ExecutionMode;
   now?: () => Date;
   shellRunner?: ShellRunner;
 }
@@ -62,7 +66,14 @@ export async function executeWorkflow(
 ): Promise<RunState> {
   const clock = params.now ?? systemClock;
   const shellRunner = params.shellRunner ?? runShellCommand;
+  const mode = params.mode ?? "fresh";
   let state = params.state;
+
+  if (mode !== "fresh" && mode !== "continue") {
+    throw new ExecutionError(`unsupported execution mode "${String(mode)}"`, {
+      runId: state.id,
+    });
+  }
 
   if (state.status !== "running") {
     throw new ExecutionError(
@@ -82,6 +93,13 @@ export async function executeWorkflow(
 
   for (const step of params.workflow.steps) {
     const stepState = getStepState(state, step.id);
+
+    if (
+      mode === "continue" &&
+      (stepState?.status === "completed" || stepState?.status === "skipped")
+    ) {
+      continue;
+    }
 
     state = {
       ...state,
@@ -116,10 +134,9 @@ export async function executeWorkflow(
       });
     }
 
-    if (step.uses !== "shell") {
+    if (step.uses !== "shell" && step.uses !== "approval") {
       const message =
-        `step "${step.id}" uses unsupported Phase 5 step type ` +
-        `"${step.uses}"`;
+        `step "${step.id}" uses unsupported step type "${step.uses}"`;
       state = await persistStepFailure({
         runsRoot: params.runsRoot,
         state,
@@ -165,6 +182,14 @@ export async function executeWorkflow(
         await persistState(params.runsRoot, state, skippedAt, step.id);
         continue;
       }
+    }
+
+    if (step.uses === "approval") {
+      state = patchStepState(state, step.id, { status: "waiting" });
+      state = setRunStatus(state, "waiting");
+      const waitingAt = readClock(clock, state.id, step.id);
+      await persistState(params.runsRoot, state, waitingAt, step.id);
+      return state;
     }
 
     let prepared: PreparedShellStep;
