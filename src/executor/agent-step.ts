@@ -11,6 +11,7 @@ import type { TemplateContext } from "../context/types";
 import { interpolateTemplate } from "../template/interpolate";
 import type { AgentStep } from "../workflow/types";
 import { ExecutionError } from "./errors";
+import { resolveTechnicalRetryCount } from "./retry";
 
 export const DEFAULT_AIRA_AGENT_TIMEOUT_SECONDS = 900;
 export const DEFAULT_AIRA_AGENT_TOOLS = [
@@ -24,6 +25,7 @@ export interface ResolvedAgentStepConfiguration {
   model?: string;
   thinking?: string;
   timeoutSeconds: number;
+  technicalRetries: number;
   tools: string[];
 }
 
@@ -98,12 +100,18 @@ export function resolveAgentStepConfiguration(
   const ordinaryTools =
     step.tools ?? command.metadata.tools ?? [...DEFAULT_AIRA_AGENT_TOOLS];
   const thinking = step.thinking ?? command.metadata.thinking;
+  const technicalRetries = resolveTechnicalRetryCount({
+    step: step.retry,
+    command: command.metadata.retry,
+    config: config.defaults?.technical_retries,
+  });
   assertValidToolNames(step.id, ordinaryTools);
 
   return {
     ...(model === undefined ? {} : { model }),
     ...(thinking === undefined ? {} : { thinking }),
     timeoutSeconds,
+    technicalRetries,
     tools: [...ordinaryTools, COMPLETE_STEP_TOOL_NAME],
   };
 }

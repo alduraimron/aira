@@ -3,6 +3,8 @@ export interface RunShellCommandParams {
   cwd: string;
   /** Timeout in seconds. */
   timeout?: number;
+  /** Cancels the spawned shell without classifying it as a timeout. */
+  signal?: AbortSignal;
 }
 
 export interface ShellCommandResult {

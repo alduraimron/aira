@@ -718,11 +718,62 @@ describe("PiRuntime timeout and cleanup", () => {
 
     expect(result.success).toBe(false);
     expect(result.timedOut).toBe(true);
+    expect(result.aborted).toBeUndefined();
     expect(result.error).toContain("timed out after 0.005 seconds");
     expect(session.abortCalls).toBe(1);
     expect(session.unsubscribeCalls).toBe(1);
     expect(session.disposeCalls).toBe(1);
     expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  test("handles an already-aborted signal without prompting", async () => {
+    const session = successfulSession("session-pre-aborted");
+    const runtime = createRuntime(async () => session);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runtime.runStep(
+      baseRequest({ signal: controller.signal }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.aborted).toBe(true);
+    expect(session.promptCalls).toHaveLength(0);
+    expect(session.abortCalls).toBe(1);
+    expect(session.unsubscribeCalls).toBe(1);
+    expect(session.disposeCalls).toBe(1);
+  });
+
+  test("reports an external abort distinctly from timeout and cleans up", async () => {
+    let markPromptStarted!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      markPromptStarted = resolve;
+    });
+    const session = new FakePiSession("session-aborted", async () => {
+      markPromptStarted();
+      await new Promise<void>(() => {});
+    });
+    const runtime = createRuntime(async () => session);
+    const controller = new AbortController();
+    const execution = runtime.runStep(
+      baseRequest({
+        timeoutSeconds: 30,
+        signal: controller.signal,
+      }),
+    );
+    await promptStarted;
+    controller.abort();
+
+    const result = await execution;
+
+    expect(result.success).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.aborted).toBe(true);
+    expect(result.error).toContain("aborted by external signal");
+    expect(session.abortCalls).toBe(1);
+    expect(session.unsubscribeCalls).toBe(1);
+    expect(session.disposeCalls).toBe(1);
   });
 });
 

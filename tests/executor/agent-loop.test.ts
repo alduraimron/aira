@@ -205,6 +205,7 @@ describe("agent children inside loops", () => {
         error: "provider failed",
       }),
       "runtime failed",
+      10,
     ],
     [
       "missing completion",
@@ -215,6 +216,7 @@ describe("agent children inside loops", () => {
         timedOut: false,
       }),
       "completed without calling complete_step",
+      1,
     ],
     [
       "protocol error",
@@ -231,8 +233,14 @@ describe("agent children inside loops", () => {
         completionError: "complete_step called twice",
       }),
       "completion protocol failed",
+      1,
     ],
-  ] as const)("fails the child, loop, and run on %s", async (_name, result, expected) => {
+  ] as const)("fails the child, loop, and run on %s", async (
+    _name,
+    result,
+    expected,
+    expectedCalls,
+  ) => {
     const workflow: Workflow = {
       name: `loop-agent-${_name.replaceAll(" ", "-")}`,
       steps: [
@@ -268,7 +276,7 @@ describe("agent children inside loops", () => {
     const persisted = await loadRun(runsRoot, state.id);
 
     expect(error.message).toContain(expected);
-    expect(calls).toBe(1);
+    expect(calls).toBe(expectedCalls);
     expect(persisted.status).toBe("failed");
     expect(persisted.current_step).toBe("cycle");
     expect(persisted.steps.cycle).toMatchObject({
@@ -278,7 +286,7 @@ describe("agent children inside loops", () => {
     });
     expect(persisted.steps.repair).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: expectedCalls,
       success: false,
     });
   });

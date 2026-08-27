@@ -879,7 +879,7 @@ describe("shell failure semantics", () => {
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.slow).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: 2,
       success: false,
       exit_code: 124,
     });
@@ -910,7 +910,7 @@ describe("shell failure semantics", () => {
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.test).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: 2,
       success: false,
     });
     expect(persisted.steps.test?.output).toContain(
@@ -1090,7 +1090,12 @@ describe("multi-command shell steps", () => {
     );
     const persisted = await loadRun(runsRoot, state.id);
 
-    expect(calls).toEqual(["test command", "lint command"]);
+    expect(calls).toEqual([
+      "test command",
+      "lint command",
+      "test command",
+      "lint command",
+    ]);
     expect(error.message).toContain('command "test" shell execution failed');
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.verify?.exit_code).toBe(1);

@@ -137,6 +137,17 @@ describe("workflow schema", () => {
     ).toBe(true);
   });
 
+  test("does not expose retry on shell steps", () => {
+    expect(
+      workflowSchema.safeParse({
+        name: "checks",
+        steps: [
+          { id: "test", uses: "shell", run: "bun test", retry: 1 },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   test("accepts a shell step with named commands", () => {
     expect(
       workflowSchema.safeParse({

@@ -95,7 +95,15 @@ interface PromptTimedOut {
   kind: "timed-out";
 }
 
-type PromptOutcome = PromptCompleted | PromptRejected | PromptTimedOut;
+interface PromptAborted {
+  kind: "aborted";
+}
+
+type PromptOutcome =
+  | PromptCompleted
+  | PromptRejected
+  | PromptTimedOut
+  | PromptAborted;
 
 interface CleanupFailure {
   kind: "session-log" | "session-cleanup";
@@ -317,9 +325,26 @@ export class PiRuntime implements AgentRuntime {
         session,
         request.prompt,
         timeoutSeconds,
+        request.signal,
       );
 
-      if (promptOutcome.kind === "timed-out") {
+      if (promptOutcome.kind === "aborted") {
+        const abortFailure = await abortAndWait(session);
+        const error =
+          "Pi session aborted by external signal" +
+          (abortFailure === undefined
+            ? ""
+            : `; abort failed: ${getErrorMessage(abortFailure)}`);
+
+        result = {
+          success: false,
+          sessionId: session.sessionId,
+          finalText: readFinalText(session, assistantSnapshot, request),
+          timedOut: false,
+          aborted: true,
+          error,
+        };
+      } else if (promptOutcome.kind === "timed-out") {
         const abortFailure = await abortAndWait(session);
         const error =
           `Pi session timed out after ${timeoutSeconds} seconds` +
@@ -362,6 +387,7 @@ export class PiRuntime implements AgentRuntime {
           type: "session_end",
           success: result.success,
           timedOut: result.timedOut,
+          aborted: result.aborted === true,
         });
         sessionEndRecorded = true;
 
@@ -391,6 +417,7 @@ export class PiRuntime implements AgentRuntime {
           type: "session_end",
           success: false,
           timedOut: false,
+          aborted: request.signal?.aborted === true,
         });
 
         try {
@@ -586,7 +613,12 @@ async function promptWithTimeout(
   session: PiSession,
   prompt: string,
   timeoutSeconds: number,
+  signal?: AbortSignal,
 ): Promise<PromptOutcome> {
+  if (signal?.aborted === true) {
+    return { kind: "aborted" };
+  }
+
   const promptOutcome = Promise.resolve()
     .then(() => session.prompt(prompt, { expandPromptTemplates: false }))
     .then<PromptOutcome, PromptOutcome>(
@@ -601,10 +633,32 @@ async function promptWithTimeout(
       Math.ceil(timeoutSeconds * 1_000),
     );
   });
-  const outcome = await Promise.race([promptOutcome, timeoutOutcome]);
+  let abortListener: (() => void) | undefined;
+  const abortOutcome = new Promise<PromptAborted>((resolve) => {
+    if (signal === undefined) {
+      return;
+    }
+
+    if (signal.aborted) {
+      resolve({ kind: "aborted" });
+      return;
+    }
+
+    abortListener = () => resolve({ kind: "aborted" });
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  const outcome = await Promise.race([
+    promptOutcome,
+    timeoutOutcome,
+    abortOutcome,
+  ]);
 
   if (timeoutTimer !== undefined) {
     clearTimeout(timeoutTimer);
+  }
+
+  if (abortListener !== undefined) {
+    signal?.removeEventListener("abort", abortListener);
   }
 
   return outcome;

@@ -7,8 +7,13 @@ import type {
 
 export const DEFAULT_SHELL_TIMEOUT_SECONDS = 300;
 export const SHELL_TIMEOUT_EXIT_CODE = 124;
+export const SHELL_ABORT_EXIT_CODE = 130;
 
-export type ShellCommandErrorKind = "spawn" | "timeout" | "signal";
+export type ShellCommandErrorKind =
+  | "spawn"
+  | "timeout"
+  | "signal"
+  | "aborted";
 
 interface ShellCommandErrorOptions extends ErrorOptions {
   kind: ShellCommandErrorKind;
@@ -43,6 +48,10 @@ export async function runShellCommand(
 ): Promise<ShellCommandResult> {
   assertShellCommandParams(params);
 
+  if (params.signal?.aborted === true) {
+    throw makePreSpawnAbortError();
+  }
+
   const timeout = params.timeout ?? DEFAULT_SHELL_TIMEOUT_SECONDS;
   const timeoutMilliseconds = Math.ceil(timeout * 1_000);
 
@@ -69,12 +78,12 @@ export async function runShellCommand(
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timedOut = false;
+    let termination: "timeout" | "aborted" | undefined;
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
     let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-    let timeoutFallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let terminationFallbackTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearTimers = () => {
+    const clearTimersAndListener = () => {
       if (timeoutTimer !== undefined) {
         clearTimeout(timeoutTimer);
       }
@@ -83,9 +92,11 @@ export async function runShellCommand(
         clearTimeout(forceKillTimer);
       }
 
-      if (timeoutFallbackTimer !== undefined) {
-        clearTimeout(timeoutFallbackTimer);
+      if (terminationFallbackTimer !== undefined) {
+        clearTimeout(terminationFallbackTimer);
       }
+
+      params.signal?.removeEventListener("abort", requestAbort);
     };
 
     const settleWithResult = (result: ShellCommandResult) => {
@@ -94,7 +105,7 @@ export async function runShellCommand(
       }
 
       settled = true;
-      clearTimers();
+      clearTimersAndListener();
       resolve(result);
     };
 
@@ -104,12 +115,22 @@ export async function runShellCommand(
       }
 
       settled = true;
-      clearTimers();
+      clearTimersAndListener();
       reject(error);
     };
 
-    const makeTimeoutError = (cause?: unknown) =>
-      new ShellCommandError(
+    const makeTerminationError = (cause?: unknown): ShellCommandError => {
+      if (termination === "aborted") {
+        return new ShellCommandError("shell command aborted by external signal", {
+          kind: "aborted",
+          stdout,
+          stderr,
+          exitCode: SHELL_ABORT_EXIT_CODE,
+          cause,
+        });
+      }
+
+      return new ShellCommandError(
         `shell command timed out after ${timeout} seconds`,
         {
           kind: "timeout",
@@ -119,6 +140,39 @@ export async function runShellCommand(
           cause,
         },
       );
+    };
+
+    const requestTermination = (reason: "timeout" | "aborted") => {
+      if (settled || termination !== undefined) {
+        return;
+      }
+
+      termination = reason;
+
+      // Aira supervises only the spawned shell. Process-tree supervision is
+      // intentionally outside this runner's scope.
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The process may have exited while this callback was queued.
+      }
+
+      forceKillTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // The process may already be gone.
+        }
+
+        terminationFallbackTimer = setTimeout(() => {
+          settleWithError(makeTerminationError());
+        }, 250);
+      }, 250);
+    };
+
+    function requestAbort(): void {
+      requestTermination("aborted");
+    }
 
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
@@ -132,8 +186,8 @@ export async function runShellCommand(
     });
 
     child.once("error", (cause) => {
-      if (timedOut) {
-        settleWithError(makeTimeoutError(cause));
+      if (termination !== undefined) {
+        settleWithError(makeTerminationError(cause));
         return;
       }
 
@@ -151,8 +205,8 @@ export async function runShellCommand(
     });
 
     child.once("close", (exitCode, signal) => {
-      if (timedOut) {
-        settleWithError(makeTimeoutError());
+      if (termination !== undefined) {
+        settleWithError(makeTerminationError());
         return;
       }
 
@@ -180,29 +234,18 @@ export async function runShellCommand(
       });
     });
 
-    timeoutTimer = setTimeout(() => {
-      timedOut = true;
+    timeoutTimer = setTimeout(
+      () => requestTermination("timeout"),
+      timeoutMilliseconds,
+    );
 
-      // Phase 5 terminates only the spawned shell. Process-tree supervision is
-      // intentionally outside this runner's scope.
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // The process may have exited while the timeout callback was queued.
+    if (params.signal !== undefined) {
+      params.signal.addEventListener("abort", requestAbort, { once: true });
+
+      if (params.signal.aborted) {
+        requestAbort();
       }
-
-      forceKillTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // The process may already be gone.
-        }
-
-        timeoutFallbackTimer = setTimeout(() => {
-          settleWithError(makeTimeoutError());
-        }, 250);
-      }, 250);
-    }, timeoutMilliseconds);
+    }
   });
 }
 
@@ -224,6 +267,13 @@ function assertShellCommandParams(params: RunShellCommandParams): void {
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new RangeError("shell command timeout must be a positive number");
   }
+}
+
+function makePreSpawnAbortError(): ShellCommandError {
+  return new ShellCommandError("shell command aborted by external signal", {
+    kind: "aborted",
+    exitCode: SHELL_ABORT_EXIT_CODE,
+  });
 }
 
 function getErrorMessage(error: unknown): string {

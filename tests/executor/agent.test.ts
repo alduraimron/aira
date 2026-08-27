@@ -334,7 +334,12 @@ describe("agent setup failures", () => {
       const workflow: Workflow = {
         name: `${commandName}-command`,
         steps: [
-          { id: "agent", uses: "agent", command: commandName },
+          {
+            id: "agent",
+            uses: "agent",
+            command: commandName,
+            retry: 5,
+          },
         ],
       };
       const state = await createState(workflow);
@@ -373,7 +378,13 @@ describe("agent setup failures", () => {
     const workflow: Workflow = {
       name: "unknown-model",
       steps: [
-        { id: "plan", uses: "agent", command: "plan", model: "missing" },
+        {
+          id: "plan",
+          uses: "agent",
+          command: "plan",
+          model: "missing",
+          retry: 5,
+        },
       ],
     };
     const state = await createState(workflow);
@@ -474,6 +485,7 @@ describe("agent failure semantics", () => {
         error: "provider unavailable",
       }),
       "runtime failed",
+      6,
     ],
     [
       "timeout",
@@ -485,6 +497,7 @@ describe("agent failure semantics", () => {
         error: "Pi session timed out after 4 seconds",
       }),
       "timed out",
+      6,
     ],
     [
       "throw",
@@ -492,6 +505,7 @@ describe("agent failure semantics", () => {
         throw new Error("session creation broke");
       },
       "runtime threw",
+      6,
     ],
     [
       "missing completion despite DONE final text",
@@ -502,6 +516,7 @@ describe("agent failure semantics", () => {
         timedOut: false,
       }),
       "completed without calling complete_step",
+      1,
     ],
     [
       "completion error",
@@ -514,6 +529,7 @@ describe("agent failure semantics", () => {
         completionError: "complete_step called twice",
       }),
       "completion protocol failed",
+      1,
     ],
     [
       "executor-invalid completion",
@@ -529,8 +545,14 @@ describe("agent failure semantics", () => {
         },
       }),
       "summary must contain non-whitespace text",
+      1,
     ],
-  ] as const)("persists %s as a technical failure", async (_name, handler, expected) => {
+  ] as const)("persists %s with the correct retry policy", async (
+    _name,
+    handler,
+    expected,
+    expectedCalls,
+  ) => {
     await writeCommand("work", "Do the work.");
     const workflow: Workflow = {
       name: `failure-${_name.replaceAll(" ", "-")}`,
@@ -565,12 +587,12 @@ describe("agent failure semantics", () => {
     const persisted = await loadRun(runsRoot, state.id);
 
     expect(error.message).toContain(expected);
-    expect(calls).toBe(1);
+    expect(calls).toBe(expectedCalls);
     expect(shellCalls).toBe(0);
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.work).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: expectedCalls,
       success: false,
     });
     expect(persisted.steps.work?.summary).toBeUndefined();
@@ -593,6 +615,7 @@ describe("agent failure semantics", () => {
           id: "plan",
           uses: "agent",
           command: "plan",
+          retry: 5,
           artifact: {
             name: "plan",
             filename: "../outside.md",
@@ -601,6 +624,7 @@ describe("agent failure semantics", () => {
       ],
     };
     const state = await createState(workflow);
+    let calls = 0;
     const error = await expectExecutionError(() =>
       executeWorkflow({
         workflow,
@@ -611,6 +635,7 @@ describe("agent failure semantics", () => {
         commandsDir,
         agentRuntime: {
           async runStep() {
+            calls += 1;
             return completedResult({
               status: "completed",
               summary: "Plan ready",
@@ -623,6 +648,7 @@ describe("agent failure semantics", () => {
     const persisted = await loadRun(runsRoot, state.id);
 
     expect(error.message).toContain("could not persist artifact");
+    expect(calls).toBe(1);
     expect(error.message).toContain("Invalid artifact filename");
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.plan).toMatchObject({
@@ -642,6 +668,7 @@ describe("agent failure semantics", () => {
           id: "plan",
           uses: "agent",
           command: "plan",
+          retry: 5,
           artifact: { name: "plan", filename: "plan.md" },
         },
       ],

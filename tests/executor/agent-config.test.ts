@@ -104,6 +104,22 @@ describe("agent configuration resolution", () => {
   );
 
   test.each([
+    ["step", step({ retry: 2 }), command({ retry: 1 }), { defaults: { technical_retries: 0 } }, 2],
+    ["command", step(), command({ retry: 1 }), { defaults: { technical_retries: 0 } }, 1],
+    ["config", step(), command(), { defaults: { technical_retries: 3 } }, 3],
+    ["explicit zero", step({ retry: 0 }), command({ retry: 4 }), { defaults: { technical_retries: 5 } }, 0],
+    ["internal", step(), command(), {}, 1],
+  ] as const)(
+    "resolves technical retries from %s precedence",
+    (_name, agentStep, agentCommand, config, expected) => {
+      expect(
+        resolveAgentStepConfiguration(agentStep, agentCommand, config)
+          .technicalRetries,
+      ).toBe(expected);
+    },
+  );
+
+  test.each([
     [
       "step",
       step({ tools: ["read", "bash"] }),

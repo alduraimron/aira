@@ -142,6 +142,40 @@ describe("shell runner", () => {
     expect(performance.now() - started).toBeLessThan(2_000);
   });
 
+  test("terminates an active command on external abort", async () => {
+    const marker = path.join(directory, "abort-started.txt");
+    const script = await writeScript(
+      "abort.ts",
+      `await Bun.write(${JSON.stringify(marker)}, "started");\n` +
+        "await Bun.sleep(5_000);\n",
+    );
+    const controller = new AbortController();
+    const started = performance.now();
+    const execution = runShellCommand({
+      command: `exec ${bunCommand(script)}`,
+      cwd: directory,
+      timeout: 30,
+      signal: controller.signal,
+    });
+
+    for (let index = 0; index < 100; index += 1) {
+      if (await Bun.file(marker).exists()) {
+        break;
+      }
+
+      await Bun.sleep(5);
+    }
+
+    expect(await Bun.file(marker).exists()).toBe(true);
+    controller.abort();
+    const error = await getShellError(() => execution);
+
+    expect(error.kind).toBe("aborted");
+    expect(error.exitCode).toBe(130);
+    expect(error.message).toContain("aborted by external signal");
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
   test("reports a non-existent command as a shell failure", async () => {
     const result = await runShellCommand({
       command: "aira-command-that-does-not-exist-5f77b3",

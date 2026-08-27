@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { validateAgentCompletion } from "../agent/completion";
+import { AgentRuntimeError } from "../agent/errors";
 import type { AgentRuntime } from "../agent/runtime";
 import type { AgentStepResult } from "../agent/types";
 import { readArtifact, writeArtifact } from "../artifacts/manager";
@@ -38,12 +39,14 @@ import {
   type ExecutionContextInput,
 } from "./context";
 import { ExecutionError } from "./errors";
+import { resolveTechnicalRetryCount } from "./retry";
+import { prepareInterruptedRunForResume } from "./resume";
 
 export type ShellRunner = (
   params: RunShellCommandParams,
 ) => Promise<ShellCommandResult>;
 
-export type ExecutionMode = "fresh" | "continue";
+export type ExecutionMode = "fresh" | "continue" | "resume";
 
 export interface ExecuteWorkflowParams {
   workflow: Workflow;
@@ -53,6 +56,8 @@ export interface ExecuteWorkflowParams {
   cwd: string;
   /** Caller-resolved default timeout in seconds. */
   shellTimeout?: number;
+  /** Cancels active agent or shell execution. */
+  signal?: AbortSignal;
   /** Defaults to strict fresh execution. */
   mode?: ExecutionMode;
   now?: () => Date;
@@ -92,10 +97,17 @@ interface ExecutionRuntime {
   shellRunner: ShellRunner;
   agentRuntime?: AgentRuntime;
   commandsDir?: string;
+  signal?: AbortSignal;
+  replayLoopId?: string;
   state: RunState;
 }
 
-type StepOutcome = "completed" | "failed" | "skipped" | "waiting";
+type StepOutcome =
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "waiting"
+  | "interrupted";
 
 type StepScope =
   | { kind: "top-level" }
@@ -125,21 +137,14 @@ export async function executeWorkflow(
     shellRunner: params.shellRunner ?? runShellCommand,
     agentRuntime: params.agentRuntime,
     commandsDir: params.commandsDir,
+    signal: params.signal,
     state: params.state,
   };
 
-  if (mode !== "fresh" && mode !== "continue") {
+  if (mode !== "fresh" && mode !== "continue" && mode !== "resume") {
     throw new ExecutionError(`unsupported execution mode "${String(mode)}"`, {
       runId: runtime.state.id,
     });
-  }
-
-  if (runtime.state.status !== "running") {
-    throw new ExecutionError(
-      `run "${runtime.state.id}" must have status "running" before execution; ` +
-        `found "${runtime.state.status}"`,
-      { runId: runtime.state.id },
-    );
   }
 
   if (runtime.state.workflow !== params.workflow.name) {
@@ -151,13 +156,51 @@ export async function executeWorkflow(
     );
   }
 
+  if (mode === "resume") {
+    const prepared = prepareInterruptedRunForResume(
+      params.workflow,
+      runtime.state,
+    );
+    runtime.state = prepared.state;
+    runtime.replayLoopId = prepared.replayLoopId;
+    const preparedAt = readClock(runtime.clock, runtime.state.id);
+    await persistRuntimeState(runtime, preparedAt, runtime.state.current_step);
+  } else if (runtime.state.status !== "running") {
+    throw new ExecutionError(
+      `run "${runtime.state.id}" must have status "running" before execution; ` +
+        `found "${runtime.state.status}"`,
+      { runId: runtime.state.id },
+    );
+  }
+
+  if (runtime.signal?.aborted === true) {
+    const nextStep = params.workflow.steps.find((step) => {
+      const status = getStepState(runtime.state, step.id)?.status;
+      return (
+        mode === "fresh" || (status !== "completed" && status !== "skipped")
+      );
+    });
+
+    if (nextStep !== undefined && nextStep.uses !== "approval") {
+      runtime.state = { ...runtime.state, current_step: nextStep.id };
+
+      if (runtime.replayLoopId === nextStep.id) {
+        await interruptLoop(runtime, nextStep.id);
+      } else {
+        await interruptBeforeStep(runtime, nextStep.id);
+      }
+
+      return runtime.state;
+    }
+  }
+
   await initializeEffectiveArtifactContext(runtime, params.workflow);
 
   for (const step of params.workflow.steps) {
     const stepState = getStepState(runtime.state, step.id);
 
     if (
-      mode === "continue" &&
+      mode !== "fresh" &&
       (stepState?.status === "completed" || stepState?.status === "skipped")
     ) {
       continue;
@@ -176,13 +219,29 @@ export async function executeWorkflow(
       });
     }
 
-    if (stepState.status !== "pending") {
+    const replayingLoop =
+      step.uses === "loop" && runtime.replayLoopId === step.id;
+
+    if (
+      stepState.status !== "pending" &&
+      !(replayingLoop && stepState.status === "running")
+    ) {
       return failTechnically(runtime, {
         stepId: step.id,
         message:
           `step "${step.id}" must have status "pending" before execution; ` +
           `found "${stepState.status}"`,
       });
+    }
+
+    if (runtime.signal?.aborted === true && step.uses !== "approval") {
+      if (replayingLoop) {
+        await interruptLoop(runtime, step.id);
+      } else {
+        await interruptBeforeStep(runtime, step.id);
+      }
+
+      return runtime.state;
     }
 
     let outcome: StepOutcome;
@@ -205,7 +264,11 @@ export async function executeWorkflow(
         });
     }
 
-    if (outcome === "waiting" || outcome === "failed") {
+    if (
+      outcome === "waiting" ||
+      outcome === "failed" ||
+      outcome === "interrupted"
+    ) {
       return runtime.state;
     }
   }
@@ -299,10 +362,14 @@ async function executeLoopStep(
   runtime: ExecutionRuntime,
   loop: LoopStep,
 ): Promise<StepOutcome> {
-  const shouldExecute = await evaluateStepWhen(runtime, loop);
+  let replayingCurrentIteration = runtime.replayLoopId === loop.id;
 
-  if (!shouldExecute) {
-    return "skipped";
+  if (!replayingCurrentIteration) {
+    const shouldExecute = await evaluateStepWhen(runtime, loop);
+
+    if (!shouldExecute) {
+      return "skipped";
+    }
   }
 
   await validateInitialLoopChildren(runtime, loop);
@@ -317,7 +384,23 @@ async function executeLoopStep(
     });
   }
 
-  if (initialLoopState.attempt >= loop.max_attempts) {
+  if (
+    (!replayingCurrentIteration &&
+      initialLoopState.status !== "pending") ||
+    (replayingCurrentIteration && initialLoopState.status !== "running")
+  ) {
+    return failTechnically(runtime, {
+      stepId: loop.id,
+      message:
+        `loop step "${loop.id}" has invalid status for execution: ` +
+        `"${initialLoopState.status}"`,
+    });
+  }
+
+  if (
+    !replayingCurrentIteration &&
+    initialLoopState.attempt >= loop.max_attempts
+  ) {
     return failTechnically(runtime, {
       stepId: loop.id,
       message:
@@ -326,11 +409,37 @@ async function executeLoopStep(
     });
   }
 
+  if (runtime.signal?.aborted === true) {
+    if (replayingCurrentIteration) {
+      await interruptLoop(runtime, loop.id);
+    } else {
+      await interruptBeforeStep(runtime, loop.id);
+    }
+
+    return "interrupted";
+  }
+
   while (true) {
-    await startLoopIteration(runtime, loop);
+    await startLoopIteration(runtime, loop, !replayingCurrentIteration);
+    replayingCurrentIteration = false;
+    runtime.replayLoopId = undefined;
+
+    if (isAbortRequested(runtime.signal)) {
+      await interruptLoop(runtime, loop.id);
+      return "interrupted";
+    }
 
     for (const child of loop.steps) {
-      await executeLoopChild(runtime, loop, child);
+      const outcome = await executeLoopChild(runtime, loop, child);
+
+      if (outcome === "interrupted") {
+        return outcome;
+      }
+    }
+
+    if (isAbortRequested(runtime.signal)) {
+      await interruptLoop(runtime, loop.id);
+      return "interrupted";
     }
 
     let satisfied: boolean;
@@ -430,6 +539,7 @@ async function validateInitialLoopChildren(
 async function startLoopIteration(
   runtime: ExecutionRuntime,
   loop: LoopStep,
+  incrementAttempt: boolean,
 ): Promise<void> {
   const loopState = getStepState(runtime.state, loop.id);
 
@@ -454,7 +564,7 @@ async function startLoopIteration(
   const firstIteration = loopState.status === "pending";
   const nextLoopState: StepState = {
     status: "running",
-    attempt: loopState.attempt + 1,
+    attempt: loopState.attempt + (incrementAttempt ? 1 : 0),
     started_at: firstIteration
       ? startedAt.toISOString()
       : (loopState.started_at ?? startedAt.toISOString()),
@@ -495,6 +605,11 @@ async function executeLoopChild(
         `status "pending" before execution; found ` +
         `"${childState.status}"`,
     });
+  }
+
+  if (runtime.signal?.aborted === true) {
+    await interruptLoop(runtime, loop.id);
+    return "interrupted";
   }
 
   const shouldExecute = await evaluateStepWhen(runtime, child, loop.id);
@@ -584,7 +699,7 @@ async function executeAgentStep(
   runtime: ExecutionRuntime,
   step: AgentStep,
   scope: StepScope,
-): Promise<"completed"> {
+): Promise<Extract<StepOutcome, "completed" | "interrupted">> {
   let agentRuntime: AgentRuntime;
   let command: Awaited<ReturnType<typeof loadCommand>>;
   let configuration: ReturnType<typeof resolveAgentStepConfiguration>;
@@ -637,9 +752,7 @@ async function executeAgentStep(
     });
   }
 
-  const stepState = getStepState(runtime.state, step.id);
-
-  if (stepState === undefined) {
+  if (getStepState(runtime.state, step.id) === undefined) {
     return failTechnically(runtime, {
       stepId: step.id,
       parentLoopId: getParentLoopId(scope),
@@ -648,67 +761,108 @@ async function executeAgentStep(
     });
   }
 
-  const attempt = stepState.attempt + 1;
-  const sessionLogPath = path.join(
-    getRunPaths(runtime.runsRoot, runtime.state.id).sessionsDir,
-    `${step.id}-${attempt}.jsonl`,
-  );
-  const startedAt = readClock(runtime.clock, runtime.state.id, step.id);
-  runtime.state = replaceStepState(runtime.state, step.id, {
-    status: "running",
-    attempt,
-    started_at: startedAt.toISOString(),
-  });
-  await persistRuntimeState(runtime, startedAt, step.id);
+  let result: AgentStepResult | undefined;
 
-  let result: AgentStepResult;
+  for (
+    let retryIndex = 0;
+    retryIndex <= configuration.technicalRetries;
+    retryIndex += 1
+  ) {
+    if (runtime.signal?.aborted === true) {
+      await interruptForScopeBeforeAttempt(runtime, step.id, scope);
+      return "interrupted";
+    }
 
-  try {
-    result = await agentRuntime.runStep({
-      stepId: step.id,
-      prompt,
-      cwd: runtime.cwd,
-      ...(configuration.model === undefined
-        ? {}
-        : { model: configuration.model }),
-      ...(configuration.thinking === undefined
-        ? {}
-        : { thinking: configuration.thinking }),
-      tools: configuration.tools,
-      timeoutSeconds: configuration.timeoutSeconds,
-      sessionLogPath,
-      completion: {
-        expectedArtifacts: [...completionSpec.expectedArtifacts],
-      },
-    });
-  } catch (cause) {
-    const message =
-      `agent step "${step.id}" runtime threw: ` + getErrorMessage(cause);
-    return failTechnically(runtime, {
-      stepId: step.id,
-      parentLoopId: getParentLoopId(scope),
-      message,
-      cause,
-    });
+    const attempt = await startExecutionAttempt(runtime, step.id);
+    const sessionLogPath = path.join(
+      getRunPaths(runtime.runsRoot, runtime.state.id).sessionsDir,
+      `${step.id}-${attempt}.jsonl`,
+    );
+
+    try {
+      result = await agentRuntime.runStep({
+        stepId: step.id,
+        prompt,
+        cwd: runtime.cwd,
+        ...(configuration.model === undefined
+          ? {}
+          : { model: configuration.model }),
+        ...(configuration.thinking === undefined
+          ? {}
+          : { thinking: configuration.thinking }),
+        tools: configuration.tools,
+        timeoutSeconds: configuration.timeoutSeconds,
+        signal: runtime.signal,
+        sessionLogPath,
+        completion: {
+          expectedArtifacts: [...completionSpec.expectedArtifacts],
+        },
+      });
+    } catch (cause) {
+      if (isAbortRequested(runtime.signal)) {
+        await interruptActiveStep(runtime, step.id, scope);
+        return "interrupted";
+      }
+
+      const message =
+        `agent step "${step.id}" runtime threw: ` + getErrorMessage(cause);
+      const canRetry =
+        isRetryableAgentRuntimeError(cause) &&
+        retryIndex < configuration.technicalRetries;
+
+      if (canRetry) {
+        await persistTechnicalAttemptFailure(runtime, step.id, message);
+        continue;
+      }
+
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        cause,
+      });
+    }
+
+    if (result.aborted === true || isAbortRequested(runtime.signal)) {
+      await interruptActiveStep(runtime, step.id, scope);
+      return "interrupted";
+    }
+
+    if (!result.success || result.timedOut) {
+      const detail =
+        result.error?.trim().length === 0 || result.error === undefined
+          ? undefined
+          : result.error;
+      const message = result.timedOut
+        ? `agent step "${step.id}" timed out` +
+          (detail === undefined ? "" : `: ${detail}`)
+        : `agent step "${step.id}" runtime failed` +
+          (detail === undefined ? "" : `: ${detail}`);
+      const output = formatAgentFailureOutput(result.finalText, message);
+
+      if (retryIndex < configuration.technicalRetries) {
+        await persistTechnicalAttemptFailure(runtime, step.id, message, {
+          output,
+        });
+        continue;
+      }
+
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        stepPatch: { output },
+      });
+    }
+
+    break;
   }
 
-  if (!result.success || result.timedOut) {
-    const detail =
-      result.error?.trim().length === 0 || result.error === undefined
-        ? undefined
-        : result.error;
-    const message = result.timedOut
-      ? `agent step "${step.id}" timed out` +
-        (detail === undefined ? "" : `: ${detail}`)
-      : `agent step "${step.id}" runtime failed` +
-        (detail === undefined ? "" : `: ${detail}`);
+  if (result === undefined) {
     return failTechnically(runtime, {
       stepId: step.id,
       parentLoopId: getParentLoopId(scope),
-      message,
-      stepPatch: {
-        output: formatAgentFailureOutput(result.finalText, message),
-      },
+      message: `agent step "${step.id}" produced no execution result`,
     });
   }
 
@@ -759,6 +913,11 @@ async function executeAgentStep(
         output: formatAgentFailureOutput(result.finalText, message),
       },
     });
+  }
+
+  if (isAbortRequested(runtime.signal)) {
+    await interruptActiveStep(runtime, step.id, scope);
+    return "interrupted";
   }
 
   const completion = validation.completion;
@@ -817,6 +976,11 @@ async function executeAgentStep(
     }
   }
 
+  if (isAbortRequested(runtime.signal)) {
+    await interruptActiveStep(runtime, step.id, scope);
+    return "interrupted";
+  }
+
   const completedAt = readClock(runtime.clock, runtime.state.id, step.id);
   const runningState = getStepState(runtime.state, step.id);
 
@@ -864,20 +1028,25 @@ async function executeShellStep(
   runtime: ExecutionRuntime,
   step: ShellStep,
   scope: StepScope,
-): Promise<Extract<StepOutcome, "completed" | "failed">> {
+): Promise<Extract<StepOutcome, "completed" | "failed" | "interrupted">> {
   let prepared: PreparedShellStep;
+  let timeout: number;
+  let technicalRetries: number;
 
   try {
     prepared = prepareShellStep(
       step,
       createExecutionTemplateContext(runtime.state, runtime.context),
     );
+    timeout = resolveShellTimeout(step.timeout, runtime.shellTimeout);
+    technicalRetries = resolveTechnicalRetryCount({
+      config: runtime.context.config.defaults?.technical_retries,
+    });
   } catch (cause) {
     const message =
       cause instanceof ExecutionError
         ? cause.message
-        : `step "${step.id}" shell command interpolation failed: ` +
-          getErrorMessage(cause);
+        : `step "${step.id}" shell setup failed: ${getErrorMessage(cause)}`;
     return failTechnically(runtime, {
       stepId: step.id,
       parentLoopId: getParentLoopId(scope),
@@ -886,25 +1055,7 @@ async function executeShellStep(
     });
   }
 
-  let timeout: number;
-
-  try {
-    timeout = resolveShellTimeout(step.timeout, runtime.shellTimeout);
-  } catch (cause) {
-    const message =
-      `step "${step.id}" shell timeout is invalid: ` +
-      getErrorMessage(cause);
-    return failTechnically(runtime, {
-      stepId: step.id,
-      parentLoopId: getParentLoopId(scope),
-      message,
-      cause,
-    });
-  }
-
-  const stepState = getStepState(runtime.state, step.id);
-
-  if (stepState === undefined) {
+  if (getStepState(runtime.state, step.id) === undefined) {
     return failTechnically(runtime, {
       stepId: step.id,
       parentLoopId: getParentLoopId(scope),
@@ -913,47 +1064,9 @@ async function executeShellStep(
     });
   }
 
-  const startedAt = readClock(runtime.clock, runtime.state.id, step.id);
-  runtime.state = patchStepState(runtime.state, step.id, {
-    status: "running",
-    attempt: stepState.attempt + 1,
-    started_at: startedAt.toISOString(),
-    completed_at: undefined,
-    success: undefined,
-    exit_code: undefined,
-    output: undefined,
-  });
-  await persistRuntimeState(runtime, startedAt, step.id);
-
-  if (prepared.multiCommand) {
-    const execution = await executeMultipleCommands({
-      commands: prepared.commands,
-      cwd: runtime.cwd,
-      timeout,
-      shellRunner: runtime.shellRunner,
-      stepId: step.id,
-    });
-    const aggregate = aggregateCommandResults(execution.commands);
-
-    if (execution.runtimeFailure !== undefined) {
-      return failTechnically(runtime, {
-        stepId: step.id,
-        parentLoopId: getParentLoopId(scope),
-        message: execution.runtimeFailure.message,
-        cause: execution.runtimeFailure.cause,
-        stepPatch: {
-          exit_code: aggregate.exitCode,
-          output: aggregate.output,
-        },
-      });
-    }
-
-    return persistShellResult(runtime, step.id, aggregate, scope);
-  }
-
   const command = prepared.commands[0];
 
-  if (command === undefined) {
+  if (!prepared.multiCommand && command === undefined) {
     return failTechnically(runtime, {
       stepId: step.id,
       parentLoopId: getParentLoopId(scope),
@@ -961,36 +1074,156 @@ async function executeShellStep(
     });
   }
 
-  let result: ShellCommandResult;
+  for (
+    let retryIndex = 0;
+    retryIndex <= technicalRetries;
+    retryIndex += 1
+  ) {
+    if (runtime.signal?.aborted === true) {
+      await interruptForScopeBeforeAttempt(runtime, step.id, scope);
+      return "interrupted";
+    }
 
-  try {
-    result = await runtime.shellRunner({
-      command: command.command,
-      cwd: runtime.cwd,
-      timeout,
-    });
-  } catch (cause) {
-    const detail = getErrorMessage(cause);
-    const message = `step "${step.id}" shell execution failed: ${detail}`;
-    result = makeRuntimeFailureResult(cause);
-    return failTechnically(runtime, {
-      stepId: step.id,
-      parentLoopId: getParentLoopId(scope),
-      message,
-      cause,
-      stepPatch: {
-        exit_code: result.exitCode,
-        output: result.output,
-      },
-    });
+    await startExecutionAttempt(runtime, step.id);
+
+    if (prepared.multiCommand) {
+      let execution: Awaited<ReturnType<typeof executeMultipleCommands>>;
+
+      try {
+        execution = await executeMultipleCommands({
+          commands: prepared.commands,
+          cwd: runtime.cwd,
+          timeout,
+          signal: runtime.signal,
+          shellRunner: runtime.shellRunner,
+          stepId: step.id,
+        });
+      } catch (cause) {
+        if (isShellAbort(cause, runtime.signal)) {
+          await interruptActiveStep(runtime, step.id, scope);
+          return "interrupted";
+        }
+
+        const message =
+          `step "${step.id}" shell execution failed: ` +
+          getErrorMessage(cause);
+        const failure = makeRuntimeFailureResult(cause);
+
+        if (retryIndex < technicalRetries) {
+          await persistTechnicalAttemptFailure(runtime, step.id, message, {
+            exit_code: failure.exitCode,
+            output: failure.output,
+          });
+          continue;
+        }
+
+        return failTechnically(runtime, {
+          stepId: step.id,
+          parentLoopId: getParentLoopId(scope),
+          message,
+          cause,
+          stepPatch: {
+            exit_code: failure.exitCode,
+            output: failure.output,
+          },
+        });
+      }
+
+      if (isAbortRequested(runtime.signal)) {
+        await interruptActiveStep(runtime, step.id, scope);
+        return "interrupted";
+      }
+
+      const aggregate = aggregateCommandResults(execution.commands);
+
+      if (execution.runtimeFailure !== undefined) {
+        const failure = execution.runtimeFailure;
+
+        if (retryIndex < technicalRetries) {
+          await persistTechnicalAttemptFailure(
+            runtime,
+            step.id,
+            failure.message,
+            {
+              exit_code: aggregate.exitCode,
+              output: aggregate.output,
+            },
+          );
+          continue;
+        }
+
+        return failTechnically(runtime, {
+          stepId: step.id,
+          parentLoopId: getParentLoopId(scope),
+          message: failure.message,
+          cause: failure.cause,
+          stepPatch: {
+            exit_code: aggregate.exitCode,
+            output: aggregate.output,
+          },
+        });
+      }
+
+      return persistShellResult(runtime, step.id, aggregate, scope);
+    }
+
+    let result: ShellCommandResult;
+
+    try {
+      result = await runtime.shellRunner({
+        command: command?.command ?? "",
+        cwd: runtime.cwd,
+        timeout,
+        signal: runtime.signal,
+      });
+    } catch (cause) {
+      if (isShellAbort(cause, runtime.signal)) {
+        await interruptActiveStep(runtime, step.id, scope);
+        return "interrupted";
+      }
+
+      const detail = getErrorMessage(cause);
+      const message = `step "${step.id}" shell execution failed: ${detail}`;
+      const failure = makeRuntimeFailureResult(cause);
+
+      if (retryIndex < technicalRetries) {
+        await persistTechnicalAttemptFailure(runtime, step.id, message, {
+          exit_code: failure.exitCode,
+          output: failure.output,
+        });
+        continue;
+      }
+
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        cause,
+        stepPatch: {
+          exit_code: failure.exitCode,
+          output: failure.output,
+        },
+      });
+    }
+
+    if (isAbortRequested(runtime.signal)) {
+      await interruptActiveStep(runtime, step.id, scope);
+      return "interrupted";
+    }
+
+    return persistShellResult(
+      runtime,
+      step.id,
+      normalizeShellResult(result),
+      scope,
+    );
   }
 
-  return persistShellResult(
-    runtime,
-    step.id,
-    normalizeShellResult(result),
-    scope,
-  );
+  return failTechnically(runtime, {
+    stepId: step.id,
+    parentLoopId: getParentLoopId(scope),
+    message: `step "${step.id}" exhausted without a shell result`,
+  });
 }
 
 function prepareShellStep(
@@ -1011,7 +1244,11 @@ function prepareShellStep(
     return {
       commands: [
         {
-          command: interpolateTemplate(step.run as string, context),
+          command: interpolateShellCommand(
+            step.id,
+            step.run as string,
+            context,
+          ),
         },
       ],
       multiCommand: false,
@@ -1030,10 +1267,27 @@ function prepareShellStep(
   return {
     commands: commands.map((command) => ({
       name: command.name,
-      command: interpolateTemplate(command.run, context),
+      command: interpolateShellCommand(step.id, command.run, context),
     })),
     multiCommand: true,
   };
+}
+
+function interpolateShellCommand(
+  stepId: string,
+  source: string,
+  context: ReturnType<typeof createExecutionTemplateContext>,
+): string {
+  const command = interpolateTemplate(source, context);
+
+  if (command.trim().length === 0) {
+    throw new ExecutionError(
+      `step "${stepId}" shell command is empty after interpolation`,
+      { stepId },
+    );
+  }
+
+  return command;
 }
 
 function resolveShellTimeout(
@@ -1054,6 +1308,7 @@ async function executeMultipleCommands(params: {
   commands: readonly PreparedShellCommand[];
   cwd: string;
   timeout: number;
+  signal?: AbortSignal;
   shellRunner: ShellRunner;
   stepId: string;
 }): Promise<{
@@ -1064,6 +1319,10 @@ async function executeMultipleCommands(params: {
   let runtimeFailure: RuntimeFailure | undefined;
 
   for (const command of params.commands) {
+    if (params.signal?.aborted === true) {
+      throw makeShellAbortError();
+    }
+
     const name = command.name ?? "command";
     let result: ShellCommandResult;
 
@@ -1073,9 +1332,18 @@ async function executeMultipleCommands(params: {
           command: command.command,
           cwd: params.cwd,
           timeout: params.timeout,
+          signal: params.signal,
         }),
       );
+
+      if (isAbortRequested(params.signal)) {
+        throw makeShellAbortError();
+      }
     } catch (cause) {
+      if (isShellAbort(cause, params.signal)) {
+        throw cause;
+      }
+
       const detail = getErrorMessage(cause);
       result = makeRuntimeFailureResult(cause);
       runtimeFailure ??= {
@@ -1172,6 +1440,190 @@ async function persistShellResult(
 
   await persistRuntimeState(runtime, completedAt, stepId);
   return result.success ? "completed" : "failed";
+}
+
+async function startExecutionAttempt(
+  runtime: ExecutionRuntime,
+  stepId: string,
+): Promise<number> {
+  const stepState = getStepState(runtime.state, stepId);
+
+  if (stepState === undefined) {
+    return failTechnically(runtime, {
+      stepId,
+      message: `step "${stepId}" is missing from run state before attempt`,
+      markStep: false,
+    });
+  }
+
+  const attempt = stepState.attempt + 1;
+  const startedAt = readClock(runtime.clock, runtime.state.id, stepId);
+  runtime.state = replaceStepState(runtime.state, stepId, {
+    status: "running",
+    attempt,
+    started_at: startedAt.toISOString(),
+  });
+  await persistRuntimeState(runtime, startedAt, stepId);
+  return attempt;
+}
+
+async function persistTechnicalAttemptFailure(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  message: string,
+  patch: Pick<StepState, "exit_code" | "output"> = {},
+): Promise<void> {
+  const stepState = getStepState(runtime.state, stepId);
+
+  if (stepState === undefined) {
+    return failTechnically(runtime, {
+      stepId,
+      message: `step "${stepId}" is missing after a technical attempt failure`,
+      markStep: false,
+    });
+  }
+
+  runtime.state = replaceStepState(runtime.state, stepId, {
+    status: "running",
+    attempt: stepState.attempt,
+    ...(stepState.started_at === undefined
+      ? {}
+      : { started_at: stepState.started_at }),
+    success: false,
+    ...(patch.exit_code === undefined ? {} : { exit_code: patch.exit_code }),
+    output: patch.output ?? `ERROR:\n${message}`,
+  });
+  const failedAt = readClock(runtime.clock, runtime.state.id, stepId);
+  await persistRuntimeState(runtime, failedAt, stepId);
+}
+
+async function interruptForScopeBeforeAttempt(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  scope: StepScope,
+): Promise<void> {
+  const state = getStepState(runtime.state, stepId);
+
+  if (state?.status === "running") {
+    await interruptActiveStep(runtime, stepId, scope);
+    return;
+  }
+
+  if (scope.kind === "loop-child") {
+    await interruptLoop(runtime, scope.loopId);
+    return;
+  }
+
+  await interruptBeforeStep(runtime, stepId);
+}
+
+async function interruptBeforeStep(
+  runtime: ExecutionRuntime,
+  stepId: string,
+): Promise<void> {
+  runtime.state = {
+    ...setRunStatus(runtime.state, "interrupted"),
+    current_step: stepId,
+  };
+  const interruptedAt = readClock(runtime.clock, runtime.state.id, stepId);
+  await persistRuntimeState(runtime, interruptedAt, stepId);
+}
+
+async function interruptActiveStep(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  scope: StepScope,
+): Promise<void> {
+  const stepState = getStepState(runtime.state, stepId);
+
+  if (stepState === undefined) {
+    return failTechnically(runtime, {
+      stepId,
+      parentLoopId: getParentLoopId(scope),
+      message: `active step "${stepId}" is missing during interruption`,
+      markStep: false,
+    });
+  }
+
+  let state = replaceStepState(runtime.state, stepId, {
+    status: "interrupted",
+    attempt: stepState.attempt,
+    ...(stepState.started_at === undefined
+      ? {}
+      : { started_at: stepState.started_at }),
+    success: false,
+    output: "INTERRUPTED:\nexecution aborted by external signal",
+  });
+  const logicalStepId =
+    scope.kind === "loop-child" ? scope.loopId : stepId;
+
+  if (scope.kind === "loop-child") {
+    state = markLoopInterrupted(state, scope.loopId);
+  }
+
+  runtime.state = {
+    ...setRunStatus(state, "interrupted"),
+    current_step: logicalStepId,
+  };
+  const interruptedAt = readClock(runtime.clock, runtime.state.id, stepId);
+  await persistRuntimeState(runtime, interruptedAt, stepId);
+}
+
+async function interruptLoop(
+  runtime: ExecutionRuntime,
+  loopId: string,
+): Promise<void> {
+  runtime.state = {
+    ...setRunStatus(markLoopInterrupted(runtime.state, loopId), "interrupted"),
+    current_step: loopId,
+  };
+  const interruptedAt = readClock(runtime.clock, runtime.state.id, loopId);
+  await persistRuntimeState(runtime, interruptedAt, loopId);
+}
+
+function markLoopInterrupted(state: RunState, loopId: string): RunState {
+  const loopState = getStepState(state, loopId);
+
+  if (loopState === undefined) {
+    throw new ExecutionError(
+      `loop step "${loopId}" is missing during interruption`,
+      { runId: state.id, stepId: loopId },
+    );
+  }
+
+  return replaceStepState(state, loopId, {
+    status: "interrupted",
+    attempt: loopState.attempt,
+    ...(loopState.started_at === undefined
+      ? {}
+      : { started_at: loopState.started_at }),
+    success: false,
+    output: "INTERRUPTED:\nexecution aborted by external signal",
+  });
+}
+
+function isRetryableAgentRuntimeError(cause: unknown): boolean {
+  return !(
+    cause instanceof AgentRuntimeError &&
+    (cause.kind === "invalid-request" || cause.kind === "model-resolution")
+  );
+}
+
+function isAbortRequested(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+function isShellAbort(cause: unknown, signal?: AbortSignal): boolean {
+  return (
+    isAbortRequested(signal) ||
+    (cause instanceof ShellCommandError && cause.kind === "aborted")
+  );
+}
+
+function makeShellAbortError(): ShellCommandError {
+  return new ShellCommandError("shell command aborted by external signal", {
+    kind: "aborted",
+  });
 }
 
 async function resetLoopChildren(

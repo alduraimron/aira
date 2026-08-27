@@ -1058,7 +1058,7 @@ describe("loop technical failures", () => {
     });
   });
 
-  test("does not retry a shell runtime error", async () => {
+  test("retries a shell runtime error within the loop child", async () => {
     const workflow: Workflow = {
       name: "loop-runtime-failure",
       steps: [
@@ -1091,7 +1091,7 @@ describe("loop technical failures", () => {
     );
     const persisted = await loadRun(runsRoot, state.id);
 
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(error.message).toContain("shell execution failed");
     expect(error.message).toContain("process could not start");
     expect(persisted.status).toBe("failed");
@@ -1102,7 +1102,7 @@ describe("loop technical failures", () => {
     });
     expect(persisted.steps.verify).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: 2,
       success: false,
       exit_code: 1,
     });
@@ -1149,7 +1149,7 @@ describe("loop technical failures", () => {
     expect(persisted.steps.cycle?.status).toBe("failed");
     expect(persisted.steps.verify).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: 2,
       success: false,
       exit_code: 124,
     });
@@ -1199,13 +1199,13 @@ describe("loop technical failures", () => {
     );
     const persisted = await loadRun(runsRoot, state.id);
 
-    expect(calls).toEqual(["test", "lint"]);
+    expect(calls).toEqual(["test", "lint", "test", "lint"]);
     expect(error.message).toContain('command "test" shell execution failed');
     expect(persisted.status).toBe("failed");
     expect(persisted.steps.cycle?.attempt).toBe(1);
     expect(persisted.steps.verify).toMatchObject({
       status: "failed",
-      attempt: 1,
+      attempt: 2,
       exit_code: 1,
     });
     expect(persisted.steps.verify?.output).toContain("== test ==");
