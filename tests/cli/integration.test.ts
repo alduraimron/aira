@@ -54,6 +54,27 @@ describe("CLI process integration", () => {
     expect(initialized.exitCode).toBe(0);
     expect(initialized.stdout).toContain("Initialized Aira");
 
+    const listed = await runProcess(["list"]);
+    expect(listed.exitCode).toBe(0);
+    expect(listed.stderr).toBe("");
+    expect(
+      listed.stdout
+        .trim()
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/)[0]),
+    ).toEqual(["bugfix", "feature", "investigate"]);
+
+    const dryRun = await runProcess([
+      "run",
+      "feature",
+      "process task",
+      "--dry-run",
+    ]);
+    expect(dryRun.exitCode).toBe(0);
+    expect(dryRun.stdout).toContain("Workflow: feature");
+    expect(dryRun.stdout).toContain("approve-plan  approval");
+    expect(await readdir(path.join(directory, ".aira", "runs"))).toEqual([]);
+
     await writeFile(
       path.join(directory, ".aira", "workflows", "smoke.yaml"),
       `name: smoke
@@ -65,23 +86,6 @@ steps:
 `,
       "utf8",
     );
-
-    const listed = await runProcess(["list"]);
-    expect(listed).toEqual({
-      exitCode: 0,
-      stdout: "smoke  Process smoke test\n",
-      stderr: "",
-    });
-
-    const dryRun = await runProcess([
-      "run",
-      "smoke",
-      "process task",
-      "--dry-run",
-    ]);
-    expect(dryRun.exitCode).toBe(0);
-    expect(dryRun.stdout).toContain("Workflow: smoke");
-    expect(await readdir(path.join(directory, ".aira", "runs"))).toEqual([]);
 
     const run = await runProcess(["run", "smoke", "process task"]);
     expect(run.exitCode).toBe(0);

@@ -1,16 +1,15 @@
 import { lstat, mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
+import {
+  DEFAULT_COMMANDS,
+  DEFAULT_CONFIG,
+  DEFAULT_WORKFLOWS,
+} from "./defaults";
 import { AiraProjectError } from "./discovery";
 import { getAiraProjectPaths, type AiraProjectPaths } from "./paths";
 
-export const STARTER_CONFIG = `defaults:
-  agent_timeout: 900
-  shell_timeout: 300
-  technical_retries: 1
-
-commands: {}
-models: {}
-`;
+export const STARTER_CONFIG = DEFAULT_CONFIG;
 
 export interface InitializeAiraProjectResult {
   paths: AiraProjectPaths;
@@ -52,10 +51,15 @@ export async function initializeAiraProject(
       mkdir(paths.commandsDir),
       mkdir(paths.runsDir),
     ]);
-    await writeFile(paths.configFile, STARTER_CONFIG, {
-      encoding: "utf8",
-      flag: "wx",
-    });
+    await Promise.all([
+      writeDefaultFile(paths.configFile, STARTER_CONFIG),
+      ...Object.entries(DEFAULT_WORKFLOWS).map(([filename, source]) =>
+        writeDefaultFile(path.join(paths.workflowsDir, filename), source),
+      ),
+      ...Object.entries(DEFAULT_COMMANDS).map(([filename, source]) =>
+        writeDefaultFile(path.join(paths.commandsDir, filename), source),
+      ),
+    ]);
   } catch (cause) {
     throw new AiraProjectError(
       `could not initialize Aira in "${paths.root}": ${getErrorMessage(cause)}`,
@@ -64,6 +68,16 @@ export async function initializeAiraProject(
   }
 
   return { paths, created: true };
+}
+
+async function writeDefaultFile(
+  filePath: string,
+  source: string,
+): Promise<void> {
+  await writeFile(filePath, source, {
+    encoding: "utf8",
+    flag: "wx",
+  });
 }
 
 function isMissingPathError(error: unknown): boolean {

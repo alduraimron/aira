@@ -1,4 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -70,11 +76,26 @@ export async function removeTemporaryDirectory(directory: string): Promise<void>
   await rm(directory, { force: true, recursive: true });
 }
 
+/** Creates an initialized project with empty fixture directories. */
 export async function createCliProject(
   root: string,
 ): Promise<AiraProjectPaths> {
   await mkdir(root, { recursive: true });
-  return (await initializeAiraProject(root)).paths;
+  const paths = (await initializeAiraProject(root)).paths;
+  await Promise.all([
+    clearDirectory(paths.workflowsDir),
+    clearDirectory(paths.commandsDir),
+  ]);
+  return paths;
+}
+
+async function clearDirectory(directory: string): Promise<void> {
+  const entries = await readdir(directory);
+  await Promise.all(
+    entries.map((entry) =>
+      rm(path.join(directory, entry), { force: true, recursive: true }),
+    ),
+  );
 }
 
 export async function writeWorkflowFixture(

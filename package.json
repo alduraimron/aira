@@ -1,6 +1,7 @@
 {
   "name": "aira",
   "version": "0.1.0",
+  "description": "CLI-first workflow orchestrator for coding agents",
   "private": true,
   "type": "module",
   "bin": {
