@@ -22,6 +22,10 @@ import {
 } from "./exit-codes";
 import type { CliIO } from "./io";
 import {
+  createCliExecutionReporter,
+  type ExecutionReporter,
+} from "./reporter";
+import {
   processSigintSource,
   type SigintSource,
   withSigintAbort,
@@ -45,6 +49,7 @@ export interface RunLifecycleParams {
   executor?: WorkflowExecutor;
   approvalDecisionApplier?: ApprovalDecisionApplier;
   approvalArtifactReader?: typeof readArtifact;
+  reporter?: ExecutionReporter;
 }
 
 export async function runLifecycle(
@@ -54,6 +59,7 @@ export async function runLifecycle(
   let shouldExecute = params.executeFirst;
   let mode: ExecutionMode = params.initialMode;
   const executor = params.executor ?? executeWorkflow;
+  const reporter = params.reporter ?? createCliExecutionReporter(params.io);
 
   while (true) {
     if (shouldExecute) {
@@ -72,6 +78,7 @@ export async function runLifecycle(
             agentRuntime: params.agentRuntime,
             signal,
             mode,
+            onEvent: (event) => reporter.emit(event),
           }),
       });
     }
@@ -80,10 +87,10 @@ export async function runLifecycle(
 
     switch (state.status) {
       case "completed":
-        params.io.writeOut(`Run completed: ${state.id}\n`);
+        params.io.writeOut(`✓ Run completed: ${state.id}\n`);
         return CLI_EXIT_SUCCESS;
       case "failed":
-        params.io.writeError(`Run failed: ${state.id}\n`);
+        params.io.writeError(`✗ Run failed: ${state.id}\n`);
         return CLI_EXIT_FAILURE;
       case "cancelled":
         params.io.writeOut("Run cancelled.\n");
@@ -126,6 +133,17 @@ export async function runLifecycle(
           );
         }
 
+        reporter.emit({
+          type: "step.started",
+          stepId: step.id,
+          stepType: "approval",
+        });
+        reporter.emit({
+          type: "approval.waiting",
+          stepId: step.id,
+          ...(step.message === undefined ? {} : { message: step.message }),
+        });
+
         const interaction = await interactWithApproval({
           workflow: params.workflow,
           runsRoot: params.paths.runsDir,
@@ -134,6 +152,7 @@ export async function runLifecycle(
           sigintSource: params.sigintSource,
           applyDecision: params.approvalDecisionApplier,
           artifactReader: params.approvalArtifactReader,
+          showWaitingHeader: false,
         });
 
         if (interaction.kind === "interrupted") {

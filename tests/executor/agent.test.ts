@@ -226,6 +226,7 @@ Implement {{ input.task }} with {{ config.commands.test }}.`,
     expect(requests[0]?.sessionLogPath).toBe(
       path.join(getRunPaths(runsRoot, state.id).sessionsDir, "plan-1.jsonl"),
     );
+    expect(requests[0]?.onEvent).toBeUndefined();
     expect(path.isAbsolute(requests[0]?.sessionLogPath ?? "")).toBe(true);
     expect(runningState).toMatchObject({
       status: "running",

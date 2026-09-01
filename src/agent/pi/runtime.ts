@@ -16,7 +16,11 @@ import {
 } from "../completion";
 import { AgentRuntimeError } from "../errors";
 import type { AgentRuntime } from "../runtime";
-import type { AgentStepRequest, AgentStepResult } from "../types";
+import type {
+  AgentRuntimeEvent,
+  AgentStepRequest,
+  AgentStepResult,
+} from "../types";
 import {
   createSessionAuditLog,
   type SessionAuditLog,
@@ -27,6 +31,7 @@ import {
   type CompleteStepToolCapture,
 } from "./completion-tool";
 import {
+  toAgentRuntimeEvent,
   toAiraSessionEventRecord,
   updateAssistantSnapshot,
   type PiAssistantSnapshot,
@@ -46,6 +51,7 @@ const ABORT_SETTLE_TIMEOUT_MILLISECONDS = 5_000;
 
 export interface PiSession {
   readonly sessionId: string;
+  readonly model?: PiModel;
   readonly state: {
     readonly errorMessage?: string;
   };
@@ -175,7 +181,12 @@ export class PiRuntime implements AgentRuntime {
       );
     }
 
-    return await this.runSession(request, session, completionCapture);
+    return await this.runSession(
+      request,
+      session,
+      completionCapture,
+      model,
+    );
   }
 
   private async getModelRuntime(stepId: string): Promise<ModelRuntime> {
@@ -263,6 +274,7 @@ export class PiRuntime implements AgentRuntime {
     request: AgentStepRequest,
     session: PiSession,
     completionCapture?: CompleteStepToolCapture,
+    resolvedModel?: PiModel,
   ): Promise<AgentStepResult> {
     let auditLog: SessionAuditLog | undefined;
     let unsubscribe: (() => void) | undefined;
@@ -303,6 +315,11 @@ export class PiRuntime implements AgentRuntime {
 
         assistantSnapshot = updateAssistantSnapshot(assistantSnapshot, event);
         auditLog?.record(toAiraSessionEventRecord(event, timestamp()));
+
+        const runtimeEvent = toAgentRuntimeEvent(event, request.stepId);
+        if (runtimeEvent !== undefined) {
+          emitAgentRuntimeEvent(request, runtimeEvent);
+        }
       };
 
       try {
@@ -318,6 +335,16 @@ export class PiRuntime implements AgentRuntime {
           },
         );
       }
+
+      const activeModel = resolvedModel ?? session.model;
+      emitAgentRuntimeEvent(request, {
+        type: "agent.started",
+        stepId: request.stepId,
+        sessionId: session.sessionId,
+        ...(activeModel === undefined
+          ? {}
+          : { model: formatPiModel(activeModel) }),
+      });
 
       const timeoutSeconds =
         request.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
@@ -580,6 +607,16 @@ function assertAgentStepRequest(request: AgentStepRequest): void {
     );
   }
 
+  if (
+    request.onEvent !== undefined &&
+    typeof request.onEvent !== "function"
+  ) {
+    throw new AgentRuntimeError(
+      `agent event listener for step "${request.stepId}" must be a function`,
+      { kind: "invalid-request", stepId: request.stepId },
+    );
+  }
+
   if (request.completion !== undefined) {
     const completionSpecError = getAgentCompletionSpecError(request.completion);
 
@@ -831,6 +868,21 @@ function sessionLogError(
       cause,
     },
   );
+}
+
+function emitAgentRuntimeEvent(
+  request: AgentStepRequest,
+  event: AgentRuntimeEvent,
+): void {
+  try {
+    request.onEvent?.(event);
+  } catch {
+    // Observers are best-effort and cannot change agent execution semantics.
+  }
+}
+
+function formatPiModel(model: PiModel): string {
+  return `${model.provider}/${model.id}`;
 }
 
 function timestamp(): string {

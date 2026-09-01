@@ -29,6 +29,7 @@ import {
   createFreshPiSession,
   PiRuntime,
   type AgentRuntime,
+  type AgentRuntimeEvent,
   type AgentStepRequest,
   type PiRuntimeOptions,
   type PiSession,
@@ -629,6 +630,84 @@ describe("PiRuntime thinking level", () => {
   });
 });
 
+describe("PiRuntime live events", () => {
+  test("emits resolved model and safe tool activity", async () => {
+    const secret = "sk-live-event-secret";
+    const session = new FakePiSession("session-live", async (current) => {
+      const message = assistantMessage("Done");
+      current.finalText = "Done";
+      current.emit({
+        type: "tool_execution_start",
+        toolCallId: "read-1",
+        toolName: "read",
+        args: {
+          path: "src/auth/service.ts",
+          environment: { API_TOKEN: secret },
+        },
+      } as AgentSessionEvent);
+      current.emit({
+        type: "tool_execution_end",
+        toolCallId: "read-1",
+        toolName: "read",
+        result: { content: secret },
+        isError: false,
+      } as AgentSessionEvent);
+      current.emit({
+        type: "message_end",
+        message,
+      } as unknown as AgentSessionEvent);
+    });
+    const runtime = createRuntime(async () => session);
+    const events: AgentRuntimeEvent[] = [];
+
+    await runtime.runStep(
+      baseRequest({
+        model: "test-provider/test-model",
+        onEvent: (event) => events.push(event),
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        type: "agent.started",
+        stepId: "plan",
+        model: "test-provider/test-model",
+        sessionId: "session-live",
+      },
+      {
+        type: "agent.tool.started",
+        stepId: "plan",
+        tool: "read",
+        summary: "read src/auth/service.ts",
+      },
+      {
+        type: "agent.tool.completed",
+        stepId: "plan",
+        tool: "read",
+        success: true,
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(secret);
+  });
+
+  test("observer failures do not change agent results", async () => {
+    const runtime = createRuntime(
+      async () => successfulSession("session-observer-failure"),
+    );
+
+    const result = await runtime.runStep(
+      baseRequest({
+        onEvent() {
+          throw new Error("renderer unavailable");
+        },
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.sessionId).toBe("session-observer-failure");
+  });
+});
+
 describe("PiRuntime prompting and failures", () => {
   test("sends the prompt once, preserves it, and extracts final text", async () => {
     const prompt = "/literal final prompt\nwith UTF-8 λ";
@@ -818,8 +897,14 @@ describe("PiRuntime session audit log", () => {
       } as unknown as AgentSessionEvent);
     });
     const runtime = createRuntime(async () => session);
+    const liveEvents: AgentRuntimeEvent[] = [];
 
-    await runtime.runStep(baseRequest({ sessionLogPath: logPath }));
+    await runtime.runStep(
+      baseRequest({
+        sessionLogPath: logPath,
+        onEvent: (event) => liveEvents.push(event),
+      }),
+    );
 
     const source = await readFile(logPath, "utf8");
     const records = source
@@ -849,6 +934,12 @@ describe("PiRuntime session audit log", () => {
       failed: false,
     });
     expect(records[7]).toMatchObject({ success: true, timedOut: false });
+    expect(liveEvents.map((event) => event.type)).toEqual([
+      "agent.started",
+      "agent.tool.started",
+      "agent.tool.completed",
+    ]);
+    expect(JSON.stringify(liveEvents)).not.toContain(secret);
     expect(source).not.toContain(secret);
     expect(await pathExists(path.dirname(logPath))).toBe(true);
   });

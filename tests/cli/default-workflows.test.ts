@@ -151,7 +151,8 @@ describe("V1 default workflow smoke tests", () => {
         },
       ),
     ).toBe(0);
-    expect(runIO.out).toContain("[approve-plan] waiting for approval");
+    expect(runIO.out).toContain("◆ approve-plan");
+    expect(runIO.out).toContain("waiting for approval");
     expect(runIO.out).toContain("Approve this implementation plan?");
     expect(runIO.out).toContain("Run completed:");
 

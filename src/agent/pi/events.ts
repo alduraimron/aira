@@ -1,5 +1,9 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
+import { sanitizeDisplayText } from "../../observability/display";
+import { COMPLETE_STEP_TOOL_NAME } from "../completion";
+import type { AgentRuntimeEvent } from "../types";
+
 export interface PiAssistantSnapshot {
   text: string;
   stopReason?: string;
@@ -11,6 +15,12 @@ export interface AiraSessionEventRecord {
   type: string;
   [key: string]: string | number | boolean | undefined;
 }
+
+const MAX_TOOL_NAME_LENGTH = 64;
+const MAX_TARGET_LENGTH = 160;
+const MAX_PATTERN_LENGTH = 80;
+const MAX_COMMAND_LENGTH = 180;
+const MAX_REASON_LENGTH = 160;
 
 export function updateAssistantSnapshot(
   current: PiAssistantSnapshot | undefined,
@@ -30,6 +40,105 @@ export function updateAssistantSnapshot(
   }
 
   return current;
+}
+
+/** Converts an observable Pi event into Aira's provider-neutral event model. */
+export function toAgentRuntimeEvent(
+  event: AgentSessionEvent,
+  stepId: string,
+): AgentRuntimeEvent | undefined {
+  switch (event.type) {
+    case "tool_execution_start": {
+      if (event.toolName === COMPLETE_STEP_TOOL_NAME) {
+        return undefined;
+      }
+
+      const tool = sanitizeToolName(event.toolName);
+      const summary = summarizePiToolCall(tool, event.args);
+      return {
+        type: "agent.tool.started",
+        stepId,
+        tool,
+        ...(summary === undefined ? {} : { summary }),
+      };
+    }
+    case "tool_execution_end":
+      if (event.toolName === COMPLETE_STEP_TOOL_NAME) {
+        return undefined;
+      }
+
+      return {
+        type: "agent.tool.completed",
+        stepId,
+        tool: sanitizeToolName(event.toolName),
+        success: !event.isError,
+      };
+    case "auto_retry_start":
+      return {
+        type: "agent.retry",
+        stepId,
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        reason: sanitizeDisplayText(
+          event.errorMessage,
+          MAX_REASON_LENGTH,
+        ),
+      };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Builds a short summary from allowlisted fields only. Unknown tools never
+ * expose their argument object.
+ */
+export function summarizePiToolCall(
+  toolName: string,
+  args: unknown,
+): string | undefined {
+  const tool = sanitizeToolName(toolName);
+
+  switch (tool) {
+    case "read":
+    case "edit":
+    case "write": {
+      const target = readSafeField(args, "path", MAX_TARGET_LENGTH);
+      return target === undefined ? tool : `${tool} ${target}`;
+    }
+    case "ls": {
+      const target = readSafeField(args, "path", MAX_TARGET_LENGTH);
+      return `${tool} ${target ?? "."}`;
+    }
+    case "grep": {
+      const pattern = readSafeField(args, "pattern", MAX_PATTERN_LENGTH);
+      const target =
+        readSafeField(args, "path", MAX_TARGET_LENGTH) ??
+        readSafeField(args, "glob", MAX_TARGET_LENGTH);
+      const parts = [
+        tool,
+        ...(pattern === undefined ? [] : [JSON.stringify(pattern)]),
+        ...(target === undefined ? [] : [target]),
+      ];
+      return parts.join(" ");
+    }
+    case "find": {
+      const pattern = readSafeField(args, "pattern", MAX_TARGET_LENGTH);
+      const target = readSafeField(args, "path", MAX_TARGET_LENGTH);
+      const parts = [
+        tool,
+        ...(pattern === undefined ? [] : [pattern]),
+        ...(target === undefined || target === "." ? [] : [target]),
+      ];
+      return parts.join(" ");
+    }
+    case "bash": {
+      const command = readSafeField(args, "command", MAX_COMMAND_LENGTH);
+      return command === undefined ? tool : `${tool} ${command}`;
+    }
+    default:
+      return undefined;
+  }
 }
 
 export function toAiraSessionEventRecord(
@@ -135,6 +244,40 @@ export function toAiraSessionEventRecord(
     default:
       return base;
   }
+}
+
+function readSafeField(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  let candidate: unknown;
+
+  try {
+    candidate = value[field];
+  } catch {
+    return undefined;
+  }
+
+  if (typeof candidate !== "string") {
+    return undefined;
+  }
+
+  const sanitized = sanitizeDisplayText(candidate, maxLength);
+  return sanitized.length === 0 ? undefined : sanitized;
+}
+
+function sanitizeToolName(value: unknown): string {
+  if (typeof value !== "string") {
+    return "tool";
+  }
+
+  const sanitized = sanitizeDisplayText(value, MAX_TOOL_NAME_LENGTH);
+  return sanitized.length === 0 ? "tool" : sanitized;
 }
 
 function extractAssistantSnapshot(

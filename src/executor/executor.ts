@@ -7,6 +7,7 @@ import type { AgentStepResult } from "../agent/types";
 import { readArtifact, writeArtifact } from "../artifacts/manager";
 import { loadCommand } from "../commands/loader";
 import { evaluateCondition } from "../conditions/evaluator";
+import { sanitizeDisplayText } from "../observability/display";
 import { getRunPaths } from "../run/paths";
 import { patchStepState, setRunStatus } from "../run/state";
 import { saveRun } from "../run/persistence";
@@ -39,12 +40,18 @@ import {
   type ExecutionContextInput,
 } from "./context";
 import { ExecutionError } from "./errors";
+import type {
+  AiraExecutionEvent,
+  ExecutionEventListener,
+} from "./events";
 import { resolveTechnicalRetryCount } from "./retry";
 import { prepareInterruptedRunForResume } from "./resume";
 
 export type ShellRunner = (
   params: RunShellCommandParams,
 ) => Promise<ShellCommandResult>;
+
+const MAX_SHELL_COMMAND_DISPLAY_LENGTH = 220;
 
 export type ExecutionMode = "fresh" | "continue" | "resume";
 
@@ -66,6 +73,8 @@ export interface ExecuteWorkflowParams {
   agentRuntime?: AgentRuntime;
   /** Root containing reusable command Markdown files. */
   commandsDir?: string;
+  /** Optional best-effort listener for operator-visible execution activity. */
+  onEvent?: ExecutionEventListener;
 }
 
 interface PreparedShellCommand {
@@ -98,6 +107,8 @@ interface ExecutionRuntime {
   agentRuntime?: AgentRuntime;
   commandsDir?: string;
   signal?: AbortSignal;
+  onEvent?: ExecutionEventListener;
+  observableSteps: Map<string, { startedAtMs: number }>;
   replayLoopId?: string;
   state: RunState;
 }
@@ -138,6 +149,8 @@ export async function executeWorkflow(
     agentRuntime: params.agentRuntime,
     commandsDir: params.commandsDir,
     signal: params.signal,
+    onEvent: params.onEvent,
+    observableSteps: new Map(),
     state: params.state,
   };
 
@@ -348,6 +361,12 @@ async function executeTopLevelNonLoopStep(
     runtime.state = setRunStatus(runtime.state, "waiting");
     const waitingAt = readClock(runtime.clock, runtime.state.id, step.id);
     await persistRuntimeState(runtime, waitingAt, step.id);
+    emitStepStarted(runtime, step, waitingAt, { kind: "top-level" });
+    emitExecutionEvent(runtime, {
+      type: "approval.waiting",
+      stepId: step.id,
+      ...(step.message === undefined ? {} : { message: step.message }),
+    });
     return "waiting";
   }
 
@@ -472,6 +491,7 @@ async function executeLoopStep(
         completed_at: completedAt.toISOString(),
       });
       await persistRuntimeState(runtime, completedAt, loop.id);
+      emitStepCompleted(runtime, loop.id, completedAt);
       return "completed";
     }
 
@@ -498,6 +518,11 @@ async function executeLoopStep(
       });
       runtime.state = setRunStatus(runtime.state, "waiting");
       await persistRuntimeState(runtime, waitingAt, loop.id);
+      emitExecutionEvent(runtime, {
+        type: "step.waiting",
+        stepId: loop.id,
+        message: `waiting after ${loop.max_attempts} attempts`,
+      });
       return "waiting";
     }
 
@@ -576,6 +601,13 @@ async function startLoopIteration(
     nextLoopState,
   );
   await persistRuntimeState(runtime, startedAt, loop.id);
+  emitStepStarted(runtime, loop, startedAt, { kind: "top-level" });
+  emitExecutionEvent(runtime, {
+    type: "loop.iteration.started",
+    stepId: loop.id,
+    attempt: nextLoopState.attempt,
+    maxAttempts: loop.max_attempts,
+  });
 }
 
 async function executeLoopChild(
@@ -689,6 +721,11 @@ async function evaluateStepWhen(
     });
     const skippedAt = readClock(runtime.clock, runtime.state.id, step.id);
     await persistRuntimeState(runtime, skippedAt, step.id);
+    emitExecutionEvent(runtime, {
+      type: "step.skipped",
+      stepId: step.id,
+      ...(parentLoopId === undefined ? {} : { parentStepId: parentLoopId }),
+    });
     return false;
   }
 
@@ -773,7 +810,11 @@ async function executeAgentStep(
       return "interrupted";
     }
 
-    const attempt = await startExecutionAttempt(runtime, step.id);
+    const { attempt, startedAt } = await startExecutionAttempt(
+      runtime,
+      step.id,
+    );
+    emitStepStarted(runtime, step, startedAt, scope, { attempt });
     const sessionLogPath = path.join(
       getRunPaths(runtime.runsRoot, runtime.state.id).sessionsDir,
       `${step.id}-${attempt}.jsonl`,
@@ -794,6 +835,11 @@ async function executeAgentStep(
         timeoutSeconds: configuration.timeoutSeconds,
         signal: runtime.signal,
         sessionLogPath,
+        ...(runtime.onEvent === undefined
+          ? {}
+          : {
+              onEvent: (event) => emitExecutionEvent(runtime, event),
+            }),
         completion: {
           expectedArtifacts: [...completionSpec.expectedArtifacts],
         },
@@ -812,6 +858,13 @@ async function executeAgentStep(
 
       if (canRetry) {
         await persistTechnicalAttemptFailure(runtime, step.id, message);
+        emitStepRetry(
+          runtime,
+          step.id,
+          scope,
+          retryIndex,
+          configuration.technicalRetries,
+        );
         continue;
       }
 
@@ -844,6 +897,13 @@ async function executeAgentStep(
         await persistTechnicalAttemptFailure(runtime, step.id, message, {
           output,
         });
+        emitStepRetry(
+          runtime,
+          step.id,
+          scope,
+          retryIndex,
+          configuration.technicalRetries,
+        );
         continue;
       }
 
@@ -953,6 +1013,14 @@ async function executeAgentStep(
       });
       runtime.state = written.state;
       storedArtifactPath = written.path;
+      emitExecutionEvent(runtime, {
+        type: "artifact.written",
+        stepId: step.id,
+        artifact: written.path,
+        ...(scope.kind === "loop-child"
+          ? { parentStepId: scope.loopId }
+          : {}),
+      });
       runtime.context = {
         ...runtime.context,
         artifacts: {
@@ -1010,6 +1078,7 @@ async function executeAgentStep(
       : { output: result.finalText }),
   });
   await persistRuntimeState(runtime, completedAt, step.id);
+  emitStepCompleted(runtime, step.id, completedAt, scope);
   return "completed";
 }
 
@@ -1084,7 +1153,11 @@ async function executeShellStep(
       return "interrupted";
     }
 
-    await startExecutionAttempt(runtime, step.id);
+    const { attempt, startedAt } = await startExecutionAttempt(
+      runtime,
+      step.id,
+    );
+    emitStepStarted(runtime, step, startedAt, scope, { attempt });
 
     if (prepared.multiCommand) {
       let execution: Awaited<ReturnType<typeof executeMultipleCommands>>;
@@ -1097,6 +1170,8 @@ async function executeShellStep(
           signal: runtime.signal,
           shellRunner: runtime.shellRunner,
           stepId: step.id,
+          runtime,
+          scope,
         });
       } catch (cause) {
         if (isShellAbort(cause, runtime.signal)) {
@@ -1114,6 +1189,7 @@ async function executeShellStep(
             exit_code: failure.exitCode,
             output: failure.output,
           });
+          emitStepRetry(runtime, step.id, scope, retryIndex, technicalRetries);
           continue;
         }
 
@@ -1149,6 +1225,7 @@ async function executeShellStep(
               output: aggregate.output,
             },
           );
+          emitStepRetry(runtime, step.id, scope, retryIndex, technicalRetries);
           continue;
         }
 
@@ -1168,10 +1245,13 @@ async function executeShellStep(
     }
 
     let result: ShellCommandResult;
+    const shellCommand = command?.command ?? "";
+    const shellStartedAt = performance.now();
+    emitShellStarted(runtime, step.id, shellCommand, scope);
 
     try {
       result = await runtime.shellRunner({
-        command: command?.command ?? "",
+        command: shellCommand,
         cwd: runtime.cwd,
         timeout,
         signal: runtime.signal,
@@ -1185,12 +1265,14 @@ async function executeShellStep(
       const detail = getErrorMessage(cause);
       const message = `step "${step.id}" shell execution failed: ${detail}`;
       const failure = makeRuntimeFailureResult(cause);
+      emitShellCompleted(runtime, step.id, failure, scope, shellStartedAt);
 
       if (retryIndex < technicalRetries) {
         await persistTechnicalAttemptFailure(runtime, step.id, message, {
           exit_code: failure.exitCode,
           output: failure.output,
         });
+        emitStepRetry(runtime, step.id, scope, retryIndex, technicalRetries);
         continue;
       }
 
@@ -1211,12 +1293,9 @@ async function executeShellStep(
       return "interrupted";
     }
 
-    return persistShellResult(
-      runtime,
-      step.id,
-      normalizeShellResult(result),
-      scope,
-    );
+    const normalized = normalizeShellResult(result);
+    emitShellCompleted(runtime, step.id, normalized, scope, shellStartedAt);
+    return persistShellResult(runtime, step.id, normalized, scope);
   }
 
   return failTechnically(runtime, {
@@ -1311,6 +1390,8 @@ async function executeMultipleCommands(params: {
   signal?: AbortSignal;
   shellRunner: ShellRunner;
   stepId: string;
+  runtime: ExecutionRuntime;
+  scope: StepScope;
 }): Promise<{
   commands: CommandExecution[];
   runtimeFailure?: RuntimeFailure;
@@ -1325,6 +1406,13 @@ async function executeMultipleCommands(params: {
 
     const name = command.name ?? "command";
     let result: ShellCommandResult;
+    const shellStartedAt = performance.now();
+    emitShellStarted(
+      params.runtime,
+      params.stepId,
+      command.command,
+      params.scope,
+    );
 
     try {
       result = normalizeShellResult(
@@ -1341,6 +1429,13 @@ async function executeMultipleCommands(params: {
       }
     } catch (cause) {
       if (isShellAbort(cause, params.signal)) {
+        emitShellCompleted(
+          params.runtime,
+          params.stepId,
+          makeRuntimeFailureResult(cause),
+          params.scope,
+          shellStartedAt,
+        );
         throw cause;
       }
 
@@ -1354,6 +1449,13 @@ async function executeMultipleCommands(params: {
       };
     }
 
+    emitShellCompleted(
+      params.runtime,
+      params.stepId,
+      result,
+      params.scope,
+      shellStartedAt,
+    );
     commands.push({ name, result });
   }
 
@@ -1439,13 +1541,20 @@ async function persistShellResult(
   }
 
   await persistRuntimeState(runtime, completedAt, stepId);
+
+  if (result.success) {
+    emitStepCompleted(runtime, stepId, completedAt, scope);
+  } else {
+    emitStepFailed(runtime, stepId, completedAt, undefined, scope);
+  }
+
   return result.success ? "completed" : "failed";
 }
 
 async function startExecutionAttempt(
   runtime: ExecutionRuntime,
   stepId: string,
-): Promise<number> {
+): Promise<{ attempt: number; startedAt: Date }> {
   const stepState = getStepState(runtime.state, stepId);
 
   if (stepState === undefined) {
@@ -1464,7 +1573,7 @@ async function startExecutionAttempt(
     started_at: startedAt.toISOString(),
   });
   await persistRuntimeState(runtime, startedAt, stepId);
-  return attempt;
+  return { attempt, startedAt };
 }
 
 async function persistTechnicalAttemptFailure(
@@ -1703,6 +1812,32 @@ async function failTechnically(
   state = setRunStatus(state, "failed");
   runtime.state = state;
   await persistRuntimeState(runtime, failedAt, params.stepId);
+
+  const failedScope: StepScope =
+    params.parentLoopId === undefined
+      ? { kind: "top-level" }
+      : { kind: "loop-child", loopId: params.parentLoopId };
+  emitStepFailed(
+    runtime,
+    params.stepId,
+    failedAt,
+    params.message,
+    failedScope,
+  );
+
+  if (
+    params.parentLoopId !== undefined &&
+    params.parentLoopId !== params.stepId
+  ) {
+    emitStepFailed(
+      runtime,
+      params.parentLoopId,
+      failedAt,
+      params.message,
+      { kind: "top-level" },
+    );
+  }
+
   throw new ExecutionError(params.message, {
     runId: runtime.state.id,
     stepId: params.stepId,
@@ -1737,6 +1872,166 @@ function replaceStepState(
       [stepId]: stepState,
     },
   };
+}
+
+function emitStepStarted(
+  runtime: ExecutionRuntime,
+  step: WorkflowStep,
+  startedAt: Date,
+  scope: StepScope,
+  metadata: { attempt?: number } = {},
+): void {
+  if (runtime.observableSteps.has(step.id)) {
+    return;
+  }
+
+  runtime.observableSteps.set(step.id, {
+    startedAtMs: startedAt.getTime(),
+  });
+  emitExecutionEvent(runtime, {
+    type: "step.started",
+    stepId: step.id,
+    stepType: step.uses,
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+    ...(metadata.attempt === undefined
+      ? {}
+      : { attempt: metadata.attempt }),
+  });
+}
+
+function emitStepCompleted(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  completedAt: Date,
+  scope: StepScope = { kind: "top-level" },
+): void {
+  emitExecutionEvent(runtime, {
+    type: "step.completed",
+    stepId,
+    success: true,
+    ...stepTiming(runtime, stepId, completedAt),
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+  });
+  runtime.observableSteps.delete(stepId);
+}
+
+function emitStepFailed(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  completedAt: Date,
+  error?: string,
+  scope: StepScope = { kind: "top-level" },
+): void {
+  emitExecutionEvent(runtime, {
+    type: "step.failed",
+    stepId,
+    ...stepTiming(runtime, stepId, completedAt),
+    ...(error === undefined ? {} : { error: inlineEventText(error, 300) }),
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+  });
+  runtime.observableSteps.delete(stepId);
+}
+
+function emitStepRetry(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  scope: StepScope,
+  retryIndex: number,
+  maxAttempts: number,
+): void {
+  emitExecutionEvent(runtime, {
+    type: "step.retry",
+    stepId,
+    attempt: retryIndex + 1,
+    maxAttempts,
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+  });
+}
+
+function emitShellStarted(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  command: string,
+  scope: StepScope,
+): void {
+  emitExecutionEvent(runtime, {
+    type: "shell.started",
+    stepId,
+    command: sanitizeDisplayText(
+      command,
+      MAX_SHELL_COMMAND_DISPLAY_LENGTH,
+    ),
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+  });
+}
+
+function emitShellCompleted(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  result: ShellCommandResult,
+  scope: StepScope,
+  startedAt?: number,
+): void {
+  emitExecutionEvent(runtime, {
+    type: "shell.completed",
+    stepId,
+    success: result.success,
+    exitCode: result.exitCode,
+    ...(startedAt === undefined
+      ? {}
+      : { durationMs: Math.max(0, performance.now() - startedAt) }),
+    ...(scope.kind === "loop-child"
+      ? { parentStepId: scope.loopId }
+      : {}),
+  });
+}
+
+function emitExecutionEvent(
+  runtime: ExecutionRuntime,
+  event: AiraExecutionEvent,
+): void {
+  try {
+    runtime.onEvent?.(event);
+  } catch {
+    // Operator reporting is best-effort and cannot affect workflow semantics.
+  }
+}
+
+function stepTiming(
+  runtime: ExecutionRuntime,
+  stepId: string,
+  completedAt: Date,
+): { durationMs?: number } {
+  const started = runtime.observableSteps.get(stepId);
+
+  if (started === undefined) {
+    return {};
+  }
+
+  return {
+    durationMs: Math.max(0, completedAt.getTime() - started.startedAtMs),
+  };
+}
+
+function inlineEventText(value: string, maxLength: number): string {
+  const inline = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return inline.length <= maxLength
+    ? inline
+    : `${inline.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 function getParentLoopId(scope: StepScope): string | undefined {

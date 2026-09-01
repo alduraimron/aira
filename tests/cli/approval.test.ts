@@ -134,7 +134,8 @@ describe("top-level approval interaction", () => {
       }),
     ).toBe(0);
     expect(modes).toEqual(["fresh", "continue"]);
-    expect(io.out).toContain("[approve-plan] waiting for approval");
+    expect(io.out).toContain("◆ approve-plan");
+    expect(io.out).toContain("waiting for approval");
     expect(io.out).toContain("Artifact: plan");
     expect(io.out).toContain("# Implementation plan");
     expect(io.out).toContain("Use signed JWTs.");

@@ -6,5 +6,6 @@ export * from "./exit-codes";
 export * from "./io";
 export * from "./lifecycle";
 export * from "./main";
+export * from "./reporter";
 export * from "./signals";
 export * from "./status";

@@ -75,6 +75,7 @@ describe("CLI process integration", () => {
     expect(dryRun.stdout).toContain("approve-plan  approval");
     expect(await readdir(path.join(directory, ".aira", "runs"))).toEqual([]);
 
+    const shellSecret = "cli-shell-secret-value";
     await writeFile(
       path.join(directory, ".aira", "workflows", "smoke.yaml"),
       `name: smoke
@@ -82,14 +83,19 @@ description: Process smoke test
 steps:
   - id: hello
     uses: shell
-    run: "printf cli-ok"
+    run: "API_TOKEN=${shellSecret} printf cli-ok"
 `,
       "utf8",
     );
 
     const run = await runProcess(["run", "smoke", "process task"]);
     expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain("● hello");
+    expect(run.stdout).toContain("$ API_TOKEN=[redacted] printf cli-ok");
+    expect(run.stdout).toContain("✓ hello");
     expect(run.stdout).toContain("Run completed:");
+    expect(run.stdout).not.toContain(shellSecret);
+    expect(run.stderr).not.toContain(shellSecret);
 
     const status = await runProcess(["status"]);
     expect(status.exitCode).toBe(0);

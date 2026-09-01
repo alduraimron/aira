@@ -1,5 +1,34 @@
 import type { AgentCompletion, AgentCompletionSpec } from "./completion";
 
+interface AgentRuntimeEventBase {
+  stepId: string;
+}
+
+export type AgentRuntimeEvent =
+  | (AgentRuntimeEventBase & {
+      type: "agent.started";
+      model?: string;
+      sessionId?: string;
+    })
+  | (AgentRuntimeEventBase & {
+      type: "agent.tool.started";
+      tool: string;
+      summary?: string;
+    })
+  | (AgentRuntimeEventBase & {
+      type: "agent.tool.completed";
+      tool: string;
+      success: boolean;
+    })
+  | (AgentRuntimeEventBase & {
+      type: "agent.retry";
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    });
+
+export type AgentRuntimeEventListener = (event: AgentRuntimeEvent) => void;
+
 export interface AgentStepRequest {
   stepId: string;
   prompt: string;
@@ -13,6 +42,8 @@ export interface AgentStepRequest {
   signal?: AbortSignal;
   /** Optional Aira-owned JSONL audit log. */
   sessionLogPath?: string;
+  /** Receives safe provider-neutral live activity for this attempt. */
+  onEvent?: AgentRuntimeEventListener;
   /** Enables Aira's provider-neutral semantic completion contract. */
   completion?: AgentCompletionSpec;
 }

@@ -32,6 +32,7 @@ export async function interactWithApproval(params: {
   sigintSource?: SigintSource;
   applyDecision?: ApprovalDecisionApplier;
   artifactReader?: ApprovalArtifactReader;
+  showWaitingHeader?: boolean;
 }): Promise<ApprovalInteractionResult> {
   const stepId = params.state.current_step;
 
@@ -147,10 +148,13 @@ async function displayApproval(
     state: RunState;
     io: CliIO;
     artifactReader?: ApprovalArtifactReader;
+    showWaitingHeader?: boolean;
   },
   step: ApprovalStep,
 ): Promise<void> {
-  params.io.writeOut(`\n[${step.id}] waiting for approval\n\n`);
+  if (params.showWaitingHeader !== false) {
+    params.io.writeOut(`\n[${step.id}] waiting for approval\n\n`);
+  }
 
   if (step.artifact !== undefined) {
     params.io.writeOut(`Artifact: ${step.artifact}\n\n`);
