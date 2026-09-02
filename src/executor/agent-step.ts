@@ -139,7 +139,9 @@ export function composeAgentPrompt(
 
   return (
     `${prompt}\n\n[Aira completion protocol]\n\n` +
-    "When the requested work is complete, call `complete_step` exactly once.\n" +
+    "When the requested work is complete, call `complete_step`.\n" +
+    "If the call is rejected, correct the payload and call it again.\n" +
+    "After a completion is accepted, do not call it again.\n" +
     "Do not claim completion only in your final text.\n" +
     artifactInstruction
   );

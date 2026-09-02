@@ -63,6 +63,6 @@ export interface AgentStepResult {
   error?: string;
   /** Accepted semantic completion, independent from runtime success. */
   completion?: AgentCompletion;
-  /** Semantic completion protocol failure, independent from runtime success. */
+  /** Protocol failure when no semantic completion was accepted. */
   completionError?: string;
 }

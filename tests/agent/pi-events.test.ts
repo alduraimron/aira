@@ -5,6 +5,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import {
   summarizePiToolCall,
   toAgentRuntimeEvent,
+  toAiraSessionEventRecord,
 } from "../../src/agent/pi/events";
 
 describe("Pi live event translation", () => {
@@ -76,6 +77,40 @@ describe("Pi live event translation", () => {
         "plan",
       ),
     ).toBeUndefined();
+    expect(
+      toAgentRuntimeEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "complete-1",
+          toolName: "complete_step",
+          result: { details: { accepted: false } },
+          isError: false,
+        } as AgentSessionEvent,
+        "plan",
+      ),
+    ).toBeUndefined();
+  });
+
+  test("records Pi tool status without labeling it completion acceptance", () => {
+    const record = toAiraSessionEventRecord(
+      {
+        type: "tool_execution_end",
+        toolCallId: "complete-1",
+        toolName: "complete_step",
+        result: { details: { accepted: false } },
+        isError: false,
+      } as AgentSessionEvent,
+      "2026-01-01T00:00:00.000Z",
+    );
+
+    expect(record).toEqual({
+      timestamp: "2026-01-01T00:00:00.000Z",
+      type: "tool_execution_end",
+      toolCallId: "complete-1",
+      toolName: "complete_step",
+      isError: false,
+    });
+    expect(record).not.toHaveProperty("accepted");
   });
 });
 

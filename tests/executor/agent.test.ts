@@ -219,7 +219,9 @@ Implement {{ input.task }} with {{ config.commands.test }}.`,
     expect(requests[0]?.prompt).toBe(
       "Implement implement auth with bun test.\n\n" +
         "[Aira completion protocol]\n\n" +
-        "When the requested work is complete, call `complete_step` exactly once.\n" +
+        "When the requested work is complete, call `complete_step`.\n" +
+        "If the call is rejected, correct the payload and call it again.\n" +
+        "After a completion is accepted, do not call it again.\n" +
         "Do not claim completion only in your final text.\n" +
         'Return artifact "plan" through complete_step.artifacts.',
     );
@@ -261,6 +263,38 @@ Implement {{ input.task }} with {{ config.commands.test }}.`,
       ),
     ).toBe(artifactContent);
     expect(await loadRun(runsRoot, state.id)).toEqual(finalState);
+  });
+
+  test("keeps an accepted completion authoritative over a later rejection", async () => {
+    await writeCommand("work", "Do the work.");
+    const workflow: Workflow = {
+      name: "accepted-completion-wins",
+      steps: [{ id: "work", uses: "agent", command: "work" }],
+    };
+    const state = await createState(workflow);
+
+    const finalState = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime: {
+        async runStep() {
+          return completedResult(noArtifactCompletion("Accepted completion"), {
+            completionError: "a later complete_step call was rejected",
+          });
+        },
+      },
+    });
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.steps.work).toMatchObject({
+      status: "completed",
+      success: true,
+      summary: "Accepted completion",
+    });
   });
 
   test("loads the current persisted artifact and lets it override caller context", async () => {
@@ -520,14 +554,13 @@ describe("agent failure semantics", () => {
       1,
     ],
     [
-      "completion error",
+      "rejected completion attempts",
       async (): Promise<AgentStepResult> => ({
         success: true,
         sessionId: "completion-error",
         finalText: "Done",
         timedOut: false,
-        completion: noArtifactCompletion(),
-        completionError: "complete_step called twice",
+        completionError: "all complete_step attempts were rejected",
       }),
       "completion protocol failed",
       1,

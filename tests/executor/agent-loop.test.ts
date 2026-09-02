@@ -219,18 +219,13 @@ describe("agent children inside loops", () => {
       1,
     ],
     [
-      "protocol error",
+      "rejected completion attempts",
       (): AgentStepResult => ({
         success: true,
         sessionId: "protocol",
         finalText: "done",
         timedOut: false,
-        completion: {
-          status: "completed",
-          summary: "Repair done",
-          artifacts: [],
-        },
-        completionError: "complete_step called twice",
+        completionError: "all complete_step attempts were rejected",
       }),
       "completion protocol failed",
       1,

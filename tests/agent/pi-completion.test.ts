@@ -178,16 +178,19 @@ describe("PiRuntime completion protocol", () => {
     expect(result.completionError).toBeUndefined();
   });
 
-  test("exposes a protocol error after repeated calls", async () => {
+  test("preserves an accepted completion after a repeated call", async () => {
     let creationOptions: PiSessionCreationOptions | undefined;
-    const payload = {
-      status: "completed",
-      summary: "Done",
-      artifacts: [],
-    };
     const session = new FakeSession("session-repeat", async () => {
-      await callCompleteStep(creationOptions, payload, "call-1");
-      await callCompleteStep(creationOptions, payload, "call-2");
+      await callCompleteStep(
+        creationOptions,
+        { status: "completed", summary: "Original", artifacts: [] },
+        "call-1",
+      );
+      await callCompleteStep(
+        creationOptions,
+        { status: "completed", summary: "Replacement", artifacts: [] },
+        "call-2",
+      );
     });
     const runtime = runtimeWithFactory(async (options) => {
       creationOptions = options;
@@ -197,12 +200,38 @@ describe("PiRuntime completion protocol", () => {
     const result = await runtime.runStep(request());
 
     expect(result.success).toBe(true);
-    expect(result.completion?.summary).toBe("Done");
-    expect(result.completionError).toContain("exactly once");
+    expect(result.completion?.summary).toBe("Original");
+    expect(result.completionError).toBeUndefined();
     expect(session.disposeCalls).toBe(1);
   });
 
-  test("does not accept a valid call after Pi rejected an earlier call", async () => {
+  test("accepts a valid call after an Aira-rejected payload", async () => {
+    let creationOptions: PiSessionCreationOptions | undefined;
+    const session = new FakeSession("session-payload-retry", async () => {
+      await callCompleteStep(
+        creationOptions,
+        { status: "completed", summary: " ", artifacts: [] },
+        "invalid-call",
+      );
+      await callCompleteStep(
+        creationOptions,
+        { status: "completed", summary: "Corrected", artifacts: [] },
+        "valid-call",
+      );
+    });
+    const runtime = runtimeWithFactory(async (options) => {
+      creationOptions = options;
+      return session;
+    });
+
+    const result = await runtime.runStep(request());
+
+    expect(result.success).toBe(true);
+    expect(result.completion?.summary).toBe("Corrected");
+    expect(result.completionError).toBeUndefined();
+  });
+
+  test("accepts a valid call after Pi reports an earlier tool error", async () => {
     let creationOptions: PiSessionCreationOptions | undefined;
     let session: FakeSession;
     session = new FakeSession("session-structural-error", async () => {
@@ -239,9 +268,36 @@ describe("PiRuntime completion protocol", () => {
     const result = await runtime.runStep(request());
 
     expect(result.success).toBe(true);
+    expect(result.completion?.summary).toBe("Done");
+    expect(result.completionError).toBeUndefined();
+  });
+
+  test("reports rejected attempts when no completion is accepted", async () => {
+    let session: FakeSession;
+    session = new FakeSession("session-only-errors", async () => {
+      session.emit({
+        type: "tool_execution_start",
+        toolCallId: "invalid-call",
+        toolName: "complete_step",
+        args: { status: "done" },
+      } as AgentSessionEvent);
+      session.emit({
+        type: "tool_execution_end",
+        toolCallId: "invalid-call",
+        toolName: "complete_step",
+        result: { content: [], details: {} },
+        isError: true,
+      } as AgentSessionEvent);
+    });
+    const runtime = runtimeWithFactory(async () => session);
+
+    const result = await runtime.runStep(request());
+
+    expect(result.success).toBe(true);
     expect(result.completion).toBeUndefined();
-    expect(result.completionError).toContain("exactly once");
-    expect(result.completionError).toContain("2 calls");
+    expect(result.completionError).toContain(
+      'Pi reported complete_step call "invalid-call" as an error',
+    );
   });
 
   test("uses fresh completion capture for each runStep call", async () => {

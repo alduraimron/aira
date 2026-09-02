@@ -377,14 +377,13 @@ describe("agent technical retries", () => {
       }),
     ],
     [
-      "duplicate completion",
+      "rejected completion attempts",
       (): AgentStepResult => ({
         success: true,
-        sessionId: "duplicate",
+        sessionId: "rejected",
         finalText: "done",
         timedOut: false,
-        completion: completion(),
-        completionError: "complete_step called twice",
+        completionError: "all complete_step attempts were rejected",
       }),
     ],
     [

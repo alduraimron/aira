@@ -34,8 +34,14 @@ interface CompleteStepToolDetails {
   error?: string;
 }
 
+export interface CompleteStepRejectedAttempt {
+  toolCallId: string;
+  error: string;
+}
+
 export interface CompleteStepCaptureState {
   callCount: number;
+  rejectedAttempts: CompleteStepRejectedAttempt[];
   completion?: AgentCompletion;
   completionError?: string;
 }
@@ -46,6 +52,18 @@ export interface CompleteStepToolCapture {
   recordInvocationError(toolCallId: string): void;
   getState(): CompleteStepCaptureState;
 }
+
+type CompleteStepAcceptanceState =
+  | { status: "pending" }
+  | {
+      status: "accepted";
+      toolCallId: string;
+      completion: AgentCompletion;
+    };
+
+const COMPLETION_ALREADY_ACCEPTED =
+  "Completion has already been accepted for this step. " +
+  "Do not call complete_step again.";
 
 export function createCompleteStepTool(
   spec: AgentCompletionSpec,
@@ -60,51 +78,68 @@ export function createCompleteStepTool(
     expectedArtifacts: [...spec.expectedArtifacts],
   };
   let callCount = 0;
-  let completion: AgentCompletion | undefined;
-  let completionError: string | undefined;
-  const startedCallIds = new Set<string>();
-  const executedCallIds = new Set<string>();
+  let acceptanceState: CompleteStepAcceptanceState = { status: "pending" };
+  const observedCallIds = new Set<string>();
+  const rejectedCallIds = new Set<string>();
+  const rejectedAttempts: CompleteStepRejectedAttempt[] = [];
 
-  const recordRepeatedCall = () => {
-    if (callCount > 1) {
-      completionError =
-        `complete_step must be called exactly once; received ${callCount} calls`;
+  const recordAttempt = (toolCallId: string) => {
+    if (observedCallIds.has(toolCallId)) {
+      return;
     }
+
+    observedCallIds.add(toolCallId);
+    callCount += 1;
+  };
+
+  const recordRejection = (toolCallId: string, error: string) => {
+    recordAttempt(toolCallId);
+
+    if (
+      (acceptanceState.status === "accepted" &&
+        toolCallId === acceptanceState.toolCallId) ||
+      rejectedCallIds.has(toolCallId)
+    ) {
+      return;
+    }
+
+    rejectedCallIds.add(toolCallId);
+    rejectedAttempts.push({ toolCallId, error });
   };
 
   const tool = defineTool({
     name: COMPLETE_STEP_TOOL_NAME,
     label: "Complete Aira Step",
     description:
-      "Record semantic completion of the current Aira workflow step. Call " +
-      "this exactly once after all requested work is complete.",
-    promptSnippet: "Record completion of the current Aira step exactly once",
+      "Record semantic completion of the current Aira workflow step. If a " +
+      "call is rejected, correct the payload and try again. Stop after a " +
+      "completion is accepted.",
+    promptSnippet:
+      "Record completion of the current Aira step; retry rejected payloads",
     executionMode: "sequential",
     parameters: completeStepParameters,
 
     async execute(toolCallId, params) {
-      const hasUnexecutedStart =
-        startedCallIds.has(toolCallId) && !executedCallIds.has(toolCallId);
+      recordAttempt(toolCallId);
 
-      if (!hasUnexecutedStart) {
-        callCount += 1;
-      }
-
-      executedCallIds.add(toolCallId);
-      recordRepeatedCall();
-
-      if (completionError !== undefined) {
-        return rejectedToolResult(completionError);
+      if (acceptanceState.status === "accepted") {
+        recordRejection(toolCallId, COMPLETION_ALREADY_ACCEPTED);
+        return rejectedToolResult(COMPLETION_ALREADY_ACCEPTED, false);
       }
 
       const validation = validateAgentCompletion(params, completionSpec);
 
       if (!validation.success) {
-        completionError = `invalid complete_step call: ${validation.error}`;
-        return rejectedToolResult(completionError);
+        const error = `invalid complete_step call: ${validation.error}`;
+        recordRejection(toolCallId, error);
+        return rejectedToolResult(error, true);
       }
 
-      completion = validation.completion;
+      acceptanceState = {
+        status: "accepted",
+        toolCallId,
+        completion: validation.completion,
+      };
       return {
         content: [
           {
@@ -120,30 +155,55 @@ export function createCompleteStepTool(
   return {
     tool,
     recordInvocationStart(toolCallId) {
-      callCount += 1;
-      startedCallIds.add(toolCallId);
-      recordRepeatedCall();
+      recordAttempt(toolCallId);
     },
     recordInvocationError(toolCallId) {
-      completionError ??=
-        `Pi reported complete_step call "${toolCallId}" as an error`;
+      recordAttempt(toolCallId);
+
+      if (
+        acceptanceState.status === "accepted" &&
+        toolCallId === acceptanceState.toolCallId
+      ) {
+        return;
+      }
+
+      recordRejection(
+        toolCallId,
+        acceptanceState.status === "pending"
+          ? `Pi reported complete_step call "${toolCallId}" as an error`
+          : COMPLETION_ALREADY_ACCEPTED,
+      );
     },
     getState() {
+      const rejectionDiagnostics = rejectedAttempts.map((attempt) => ({
+        ...attempt,
+      }));
+
       return {
         callCount,
-        completion: cloneCompletion(completion),
-        completionError,
+        rejectedAttempts: rejectionDiagnostics,
+        completion:
+          acceptanceState.status === "accepted"
+            ? cloneCompletion(acceptanceState.completion)
+            : undefined,
+        completionError:
+          acceptanceState.status === "pending"
+            ? rejectionDiagnostics.at(-1)?.error
+            : undefined,
       };
     },
   };
 }
 
-function rejectedToolResult(error: string) {
+function rejectedToolResult(error: string, retryable: boolean) {
   return {
     content: [
       {
         type: "text" as const,
-        text: `Completion rejected: ${error}`,
+        text: retryable
+          ? `Completion rejected: ${error}\n` +
+            "Correct the completion payload and call complete_step again."
+          : error,
       },
     ],
     details: { accepted: false, error },

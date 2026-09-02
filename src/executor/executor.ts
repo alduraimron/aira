@@ -926,24 +926,24 @@ async function executeAgentStep(
     });
   }
 
-  if (result.completionError !== undefined) {
-    const detail =
-      result.completionError.trim().length === 0
-        ? "unspecified completion protocol error"
-        : result.completionError;
-    const message =
-      `agent step "${step.id}" completion protocol failed: ${detail}`;
-    return failTechnically(runtime, {
-      stepId: step.id,
-      parentLoopId: getParentLoopId(scope),
-      message,
-      stepPatch: {
-        output: formatAgentFailureOutput(result.finalText, message),
-      },
-    });
-  }
-
   if (result.completion === undefined) {
+    if (result.completionError !== undefined) {
+      const detail =
+        result.completionError.trim().length === 0
+          ? "unspecified completion protocol error"
+          : result.completionError;
+      const message =
+        `agent step "${step.id}" completion protocol failed: ${detail}`;
+      return failTechnically(runtime, {
+        stepId: step.id,
+        parentLoopId: getParentLoopId(scope),
+        message,
+        stepPatch: {
+          output: formatAgentFailureOutput(result.finalText, message),
+        },
+      });
+    }
+
     const message =
       `agent step "${step.id}" completed without calling complete_step`;
     return failTechnically(runtime, {
