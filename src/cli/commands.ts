@@ -18,6 +18,7 @@ import {
 import {
   createRun,
   findLatestRunId,
+  isPendingRevisionResumeState,
   loadRun,
   type RunState,
 } from "../run";
@@ -191,7 +192,11 @@ async function executeResume(
   const paths = await discoverAiraProject(dependencies.cwd);
   const state = await loadRun(paths.runsDir, runId);
 
-  if (state.status !== "interrupted" && state.status !== "waiting") {
+  if (
+    state.status !== "interrupted" &&
+    state.status !== "waiting" &&
+    !isPendingRevisionResumeState(state)
+  ) {
     throw resumeStatusError(state);
   }
 
@@ -251,7 +256,8 @@ async function executeResume(
     io: dependencies.io,
     sigintSource: dependencies.sigintSource,
     initialMode: "resume",
-    executeFirst: state.status === "interrupted",
+    executeFirst:
+      state.status === "interrupted" || isPendingRevisionResumeState(state),
     agentRuntime,
     executor: dependencies.executor ?? executeWorkflow,
     approvalDecisionApplier: dependencies.approvalDecisionApplier,

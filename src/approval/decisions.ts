@@ -1,5 +1,11 @@
 import { saveRun } from "../run/persistence";
-import type { RunState, StepState } from "../run/types";
+import { getPendingRevision } from "../run/revisions";
+import type {
+  RevisionArtifactReference,
+  RevisionRecord,
+  RunState,
+  StepState,
+} from "../run/types";
 import type {
   ApprovalStep,
   Workflow,
@@ -52,6 +58,14 @@ export async function applyApprovalDecision(
           params.state,
         )
       : undefined;
+  const revisionFeedback =
+    params.decision === "revise"
+      ? normalizeRevisionFeedback(
+          params.feedback,
+          params.state.id,
+          params.stepId,
+        )
+      : undefined;
   const decidedAt = readClock(
     params.now ?? systemClock,
     params.state.id,
@@ -84,11 +98,21 @@ export async function applyApprovalDecision(
         );
       }
 
+      if (revisionFeedback === undefined) {
+        throw new ApprovalError("revision feedback is missing", {
+          runId: params.state.id,
+          stepId: params.stepId,
+        });
+      }
+
       nextState = applyRevise(
         params.workflow,
         params.state,
+        preconditions.approval,
         preconditions.approvalIndex,
         revisionRange,
+        revisionFeedback,
+        decidedAt,
       );
       break;
   }
@@ -273,9 +297,22 @@ function applyCancel(
 function applyRevise(
   workflow: Workflow,
   state: RunState,
+  approval: ApprovalStep,
   approvalIndex: number,
   revisionRange: RevisionRange,
+  feedback: string,
+  requestedAt: Date,
 ): RunState {
+  const pendingRevision = getPendingRevision(state);
+
+  if (pendingRevision !== undefined) {
+    throw new ApprovalError(
+      `run "${state.id}" already has a pending revision for step ` +
+        `"${pendingRevision.target_step}"`,
+      { runId: state.id, stepId: approval.id },
+    );
+  }
+
   const steps = { ...state.steps };
 
   for (
@@ -319,12 +356,59 @@ function applyRevise(
 
   steps[approvalStep.id] = resetApprovalStep(approvalState);
 
+  const revision: RevisionRecord = {
+    approval_step: approval.id,
+    target_step: revisionRange.targetStepId,
+    feedback,
+    requested_at: requestedAt.toISOString(),
+    status: "pending",
+    ...getPreviousArtifactReference(state, approval),
+  };
+
   return {
     ...state,
     status: "running",
     current_step: revisionRange.targetStepId,
     steps,
+    revisions: [...(state.revisions ?? []), revision],
   };
+}
+
+function getPreviousArtifactReference(
+  state: RunState,
+  approval: ApprovalStep,
+): { previous_artifact?: RevisionArtifactReference } {
+  const name = approval.artifact;
+
+  if (
+    name === undefined ||
+    !Object.prototype.hasOwnProperty.call(state.artifacts, name)
+  ) {
+    return {};
+  }
+
+  const artifact = state.artifacts[name];
+
+  return artifact === undefined
+    ? {}
+    : { previous_artifact: { name, path: artifact.current } };
+}
+
+function normalizeRevisionFeedback(
+  feedback: string | undefined,
+  runId: string,
+  stepId: string,
+): string {
+  const normalized = typeof feedback === "string" ? feedback.trim() : "";
+
+  if (normalized.length === 0) {
+    throw new ApprovalError("revision feedback must not be empty", {
+      runId,
+      stepId,
+    });
+  }
+
+  return normalized;
 }
 
 function resetExecutionStep(stepState: StepState): StepState {

@@ -4,13 +4,21 @@ import { validateAgentCompletion } from "../agent/completion";
 import { AgentRuntimeError } from "../agent/errors";
 import type { AgentRuntime } from "../agent/runtime";
 import type { AgentStepResult } from "../agent/types";
-import { readArtifact, writeArtifact } from "../artifacts/manager";
+import {
+  readArtifact,
+  readArtifactVersion,
+  writeArtifact,
+} from "../artifacts/manager";
 import { loadCommand } from "../commands/loader";
 import { evaluateCondition } from "../conditions/evaluator";
 import { sanitizeDisplayText } from "../observability/display";
 import { getRunPaths } from "../run/paths";
-import { patchStepState, setRunStatus } from "../run/state";
 import { saveRun } from "../run/persistence";
+import {
+  getPendingRevision,
+  resolveRevisionForStep,
+} from "../run/revisions";
+import { patchStepState, setRunStatus } from "../run/state";
 import type { RunState, StepState } from "../run/types";
 import {
   DEFAULT_SHELL_TIMEOUT_SECONDS,
@@ -38,6 +46,8 @@ import {
 import {
   createExecutionTemplateContext,
   type ExecutionContextInput,
+  type ResolvedExecutionContext,
+  type RevisionContext,
 } from "./context";
 import { ExecutionError } from "./errors";
 import type {
@@ -45,7 +55,7 @@ import type {
   ExecutionEventListener,
 } from "./events";
 import { resolveTechnicalRetryCount } from "./retry";
-import { prepareInterruptedRunForResume } from "./resume";
+import { prepareRunForResume } from "./resume";
 
 export type ShellRunner = (
   params: RunShellCommandParams,
@@ -99,7 +109,7 @@ interface RuntimeFailure {
 
 interface ExecutionRuntime {
   runsRoot: string;
-  context: ExecutionContextInput;
+  context: ResolvedExecutionContext;
   cwd: string;
   shellTimeout?: number;
   clock: () => Date;
@@ -141,7 +151,12 @@ export async function executeWorkflow(
   const mode = params.mode ?? "fresh";
   const runtime: ExecutionRuntime = {
     runsRoot: params.runsRoot,
-    context: params.context,
+    context: {
+      config: params.context.config,
+      ...(params.context.artifacts === undefined
+        ? {}
+        : { artifacts: params.context.artifacts }),
+    },
     cwd: params.cwd,
     shellTimeout: params.shellTimeout,
     clock: params.now ?? systemClock,
@@ -170,10 +185,7 @@ export async function executeWorkflow(
   }
 
   if (mode === "resume") {
-    const prepared = prepareInterruptedRunForResume(
-      params.workflow,
-      runtime.state,
-    );
+    const prepared = prepareRunForResume(params.workflow, runtime.state);
     runtime.state = prepared.state;
     runtime.replayLoopId = prepared.replayLoopId;
     const preparedAt = readClock(runtime.clock, runtime.state.id);
@@ -207,7 +219,7 @@ export async function executeWorkflow(
     }
   }
 
-  await initializeEffectiveArtifactContext(runtime, params.workflow);
+  await initializeEffectiveExecutionContext(runtime, params.workflow);
 
   for (const step of params.workflow.steps) {
     const stepState = getStepState(runtime.state, step.id);
@@ -293,11 +305,12 @@ export async function executeWorkflow(
   return runtime.state;
 }
 
-async function initializeEffectiveArtifactContext(
+async function initializeEffectiveExecutionContext(
   runtime: ExecutionRuntime,
   workflow: Workflow,
 ): Promise<void> {
   const persistedArtifacts: Record<string, string> = {};
+  let revisionContext: RevisionContext | undefined;
 
   try {
     for (const name of Object.keys(runtime.state.artifacts)) {
@@ -306,6 +319,29 @@ async function initializeEffectiveArtifactContext(
         state: runtime.state,
         name,
       });
+    }
+
+    const pendingRevision = getPendingRevision(runtime.state);
+
+    if (pendingRevision !== undefined) {
+      const previousArtifact = pendingRevision.previous_artifact;
+      revisionContext = {
+        targetStep: pendingRevision.target_step,
+        requestedAt: pendingRevision.requested_at,
+        feedback: pendingRevision.feedback,
+        ...(previousArtifact === undefined
+          ? {}
+          : {
+              previousArtifact: await readArtifactVersion({
+                runsRoot: runtime.runsRoot,
+                state: runtime.state,
+                name: previousArtifact.name,
+                path: previousArtifact.path,
+              }),
+              previousArtifactName: previousArtifact.name,
+              previousArtifactPath: previousArtifact.path,
+            }),
+      };
     }
   } catch (cause) {
     const step =
@@ -341,6 +377,7 @@ async function initializeEffectiveArtifactContext(
       ...(runtime.context.artifacts ?? {}),
       ...persistedArtifacts,
     },
+    ...(revisionContext === undefined ? {} : { revision: revisionContext }),
   };
 }
 
@@ -1061,22 +1098,26 @@ async function executeAgentStep(
     });
   }
 
-  runtime.state = replaceStepState(runtime.state, step.id, {
-    status: "completed",
-    attempt: runningState.attempt,
-    ...(runningState.started_at === undefined
-      ? {}
-      : { started_at: runningState.started_at }),
-    completed_at: completedAt.toISOString(),
-    success: true,
-    summary: completion.summary,
-    ...(storedArtifactPath === undefined
-      ? {}
-      : { artifact: storedArtifactPath }),
-    ...(result.finalText.trim().length === 0
-      ? {}
-      : { output: result.finalText }),
-  });
+  runtime.state = replaceStepState(
+    resolveRevisionForStep(runtime.state, step.id, completedAt),
+    step.id,
+    {
+      status: "completed",
+      attempt: runningState.attempt,
+      ...(runningState.started_at === undefined
+        ? {}
+        : { started_at: runningState.started_at }),
+      completed_at: completedAt.toISOString(),
+      success: true,
+      summary: completion.summary,
+      ...(storedArtifactPath === undefined
+        ? {}
+        : { artifact: storedArtifactPath }),
+      ...(result.finalText.trim().length === 0
+        ? {}
+        : { output: result.finalText }),
+    },
+  );
   await persistRuntimeState(runtime, completedAt, step.id);
   emitStepCompleted(runtime, step.id, completedAt, scope);
   return "completed";

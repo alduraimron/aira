@@ -15,6 +15,7 @@ import type {
   AgentStepRequest,
   AgentStepResult,
 } from "../../src/agent";
+import { applyApprovalDecision } from "../../src/approval";
 import { writeArtifact } from "../../src/artifacts";
 import {
   executeWorkflow,
@@ -346,6 +347,106 @@ describe("agent resume and durable outputs", () => {
     expect(
       await readFile(path.join(paths.artifactsDir, "plan-v2.md"), "utf8"),
     ).toBe("plan v2 after resume");
+  });
+
+  test("restores revision feedback and the previous artifact after a crash", async () => {
+    await writeFile(path.join(commandsDir, "plan.md"), "Create a plan.", "utf8");
+    const workflow: Workflow = {
+      name: "resume-revision",
+      steps: [
+        {
+          id: "plan",
+          uses: "agent",
+          command: "plan",
+          artifact: {
+            name: "plan",
+            filename: "plan.md",
+            versioned: true,
+          },
+        },
+        {
+          id: "approve",
+          uses: "approval",
+          artifact: "plan",
+          revise: "plan",
+        },
+      ],
+    };
+    const state = await createState(workflow);
+    const requests: AgentStepRequest[] = [];
+    let calls = 0;
+    const agentRuntime: AgentRuntime = {
+      async runStep(request) {
+        calls += 1;
+        requests.push(request);
+        return completedAgentResult(`plan v${calls}`);
+      },
+    };
+    const firstWaiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime,
+    });
+    const feedback = "Add validator tests and a rollback section.";
+    const revised = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state: firstWaiting,
+      stepId: "approve",
+      decision: "revise",
+      feedback,
+    });
+    let crashed = patchStepState(revised, "plan", {
+      status: "running",
+      attempt: 2,
+      started_at: "2026-08-26T11:30:00.000Z",
+    });
+    crashed = {
+      ...crashed,
+      status: "running",
+      current_step: "plan",
+    };
+    await saveRun(runsRoot, crashed);
+
+    const resumed = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state: await loadRun(runsRoot, state.id),
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime,
+      mode: "resume",
+    });
+
+    expect(calls).toBe(2);
+    expect(requests[1]?.prompt).toContain(feedback);
+    expect(requests[1]?.prompt).toContain("plan v1");
+    expect(requests[1]?.sessionLogPath).toBe(
+      path.join(
+        getRunPaths(runsRoot, state.id).sessionsDir,
+        "plan-3.jsonl",
+      ),
+    );
+    expect(resumed.status).toBe("waiting");
+    expect(resumed.current_step).toBe("approve");
+    expect(resumed.steps.plan).toMatchObject({
+      status: "completed",
+      attempt: 3,
+      artifact: "artifacts/plan-v2.md",
+    });
+    expect(resumed.revisions?.[0]).toMatchObject({
+      status: "resolved",
+      feedback,
+      previous_artifact: {
+        name: "plan",
+        path: "artifacts/plan-v1.md",
+      },
+    });
   });
 });
 

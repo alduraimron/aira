@@ -139,6 +139,13 @@ describe("execution context", () => {
       input: state.input,
       config: { commands: { test: "bun test" } },
       artifacts: { plan: "resolved plan content" },
+      revision: {
+        active: false,
+        feedback: "",
+        previous_artifact: "",
+        previous_artifact_name: "",
+        previous_artifact_path: "",
+      },
       steps: state.steps,
       run: {
         id: state.id,
@@ -1289,6 +1296,7 @@ describe("approval continuation", () => {
       state,
       stepId: "approve",
       decision: "revise",
+      feedback: "Clarify the rollout plan",
     });
     const error = await expectExecutionError(() =>
       executeWorkflow({

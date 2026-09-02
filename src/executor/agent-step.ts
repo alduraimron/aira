@@ -131,6 +131,7 @@ export function composeAgentPrompt(
   completion: AgentCompletionSpec,
 ): string {
   const prompt = interpolateTemplate(commandPrompt, context);
+  const revisionInstruction = composeRevisionInstruction(context);
   const artifactInstruction =
     completion.expectedArtifacts.length === 0
       ? "Return an empty array through complete_step.artifacts."
@@ -138,13 +139,49 @@ export function composeAgentPrompt(
         "complete_step.artifacts.";
 
   return (
-    `${prompt}\n\n[Aira completion protocol]\n\n` +
+    `${prompt}${revisionInstruction}\n\n[Aira completion protocol]\n\n` +
     "When the requested work is complete, call `complete_step`.\n" +
     "If the call is rejected, correct the payload and call it again.\n" +
     "After a completion is accepted, do not call it again.\n" +
     "Do not claim completion only in your final text.\n" +
     artifactInstruction
   );
+}
+
+function composeRevisionInstruction(context: TemplateContext): string {
+  const revision = context.revision;
+
+  if (revision.active !== true) {
+    return "";
+  }
+
+  const feedback = getRevisionString(revision.feedback);
+  const previousArtifact = getRevisionString(revision.previous_artifact);
+  const artifactName = getRevisionString(revision.previous_artifact_name);
+  const artifactPath = getRevisionString(revision.previous_artifact_path);
+  const artifactLocation =
+    artifactPath.length === 0
+      ? artifactName
+      : `${artifactName} at ${artifactPath}`;
+  const artifactLabel =
+    artifactLocation.length === 0
+      ? "Previous artifact"
+      : `Previous artifact (${artifactLocation})`;
+
+  return (
+    "\n\n[Aira revision context]\n\n" +
+    "This step is revising an artifact after human review.\n\n" +
+    "Human revision feedback:\n\n" +
+    `${feedback}\n\n` +
+    `${artifactLabel}:\n\n` +
+    (previousArtifact.length === 0
+      ? "(No previous artifact was available.)"
+      : previousArtifact)
+  );
+}
+
+function getRevisionString(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
 function assertProtocolToolIsNotConfigured(

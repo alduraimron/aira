@@ -15,6 +15,7 @@ import {
   removeTemporaryDirectory,
   TestCliIO,
   TestSigintSource,
+  writeCommandFixture,
   writeWorkflowFixture,
 } from "./helpers";
 
@@ -135,6 +136,63 @@ steps:
       status: "completed",
       attempt: 0,
       result: "approved",
+    });
+  });
+
+  test("resumes a running checkpoint persisted after revision feedback", async () => {
+    await writeCommandFixture(paths, "plan", "Create the plan.");
+    await writeWorkflowFixture(
+      paths,
+      "feature.yaml",
+      `
+name: feature
+steps:
+  - id: plan
+    uses: agent
+    command: plan
+  - id: approve
+    uses: approval
+    revise: plan
+`,
+    );
+    let state = await createState({
+      status: "running",
+      currentStep: "plan",
+      stepIds: ["plan", "approve"],
+    });
+    state = {
+      ...state,
+      revisions: [
+        {
+          approval_step: "approve",
+          target_step: "plan",
+          feedback: "Add rollback coverage",
+          requested_at: "2026-08-27T07:04:00.000Z",
+          status: "pending",
+        },
+      ],
+    };
+    await saveRun(paths.runsDir, state);
+    const io = new TestCliIO();
+    let mode: string | undefined;
+    let received: RunState | undefined;
+
+    expect(
+      await runCli(["resume", state.id], {
+        cwd: directory,
+        io,
+        executor: async (params) => {
+          mode = params.mode;
+          received = params.state;
+          return { ...params.state, status: "completed" };
+        },
+      }),
+    ).toBe(0);
+    expect(mode).toBe("resume");
+    expect(received?.current_step).toBe("plan");
+    expect(received?.revisions?.[0]).toMatchObject({
+      status: "pending",
+      feedback: "Add rollback coverage",
     });
   });
 

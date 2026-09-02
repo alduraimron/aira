@@ -13,6 +13,7 @@ import {
   ArtifactError,
   getArtifactAbsolutePath,
   readArtifact,
+  readArtifactVersion,
   writeArtifact,
 } from "../../src/artifacts";
 import { createRun, getRunPaths, loadRun } from "../../src/run";
@@ -163,6 +164,22 @@ describe("versioned artifacts", () => {
     expect(await readArtifact({ runsRoot, state, name: "plan" })).toBe(
       "Plan three",
     );
+    expect(
+      await readArtifactVersion({
+        runsRoot,
+        state,
+        name: "plan",
+        path: "artifacts/plan-v1.md",
+      }),
+    ).toBe("Plan one");
+    expect(
+      await readArtifactVersion({
+        runsRoot,
+        state,
+        name: "plan",
+        path: "artifacts/plan-v2.md",
+      }),
+    ).toBe("Plan two");
 
     const artifactsDir = getRunPaths(runsRoot, state.id).artifactsDir;
     expect(await readFile(path.join(artifactsDir, "plan-v1.md"), "utf8")).toBe(
@@ -265,6 +282,32 @@ describe("artifact validation", () => {
     );
 
     expect(error.message).toContain("Invalid artifact filename");
+  });
+
+  test("rejects an artifact version outside the persisted history", async () => {
+    state = (
+      await writeArtifact({
+        runsRoot,
+        state,
+        name: "plan",
+        filename: "plan.md",
+        versioned: true,
+        content: "Plan one",
+      })
+    ).state;
+
+    const error = await expectArtifactError(() =>
+      readArtifactVersion({
+        runsRoot,
+        state,
+        name: "plan",
+        path: "artifacts/plan-v2.md",
+      }),
+    );
+
+    expect(error.message).toContain(
+      "Artifact version is not present in run state",
+    );
   });
 
   test("throws a clear error for a missing artifact", async () => {

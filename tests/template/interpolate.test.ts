@@ -27,6 +27,11 @@ const context: TemplateContext = {
     discovery: "Repository architecture\n\n- API in `src/api`\n- Tests in `tests`",
     plan: "Approved implementation plan",
   },
+  revision: {
+    active: true,
+    feedback: "Add migration rollback coverage",
+    previous_artifact: "Previous implementation plan",
+  },
   steps: {
     verify: {
       status: "completed",
@@ -63,6 +68,17 @@ describe("template interpolation", () => {
   test("replaces one string value", () => {
     expect(interpolateTemplate("{{ input.task }}", context)).toBe(
       "Implement JWT authentication",
+    );
+  });
+
+  test("exposes revision feedback and the previous artifact", () => {
+    expect(
+      interpolateTemplate(
+        "{{ revision.feedback }}\n{{ revision.previous_artifact }}",
+        context,
+      ),
+    ).toBe(
+      "Add migration rollback coverage\nPrevious implementation plan",
     );
   });
 

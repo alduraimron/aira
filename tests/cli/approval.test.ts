@@ -152,8 +152,12 @@ describe("top-level approval interaction", () => {
     expect(persisted.steps["approve-plan"]?.attempt).toBe(0);
   });
 
-  test("applies bare revise through the existing API and continues", async () => {
-    const io = new TestCliIO(["R"]);
+  test("collects non-empty revision feedback, persists it, and continues", async () => {
+    const io = new TestCliIO([
+      "R",
+      "   ",
+      "  Add validator tests and migration rollback.  ",
+    ]);
     const states: RunState[] = [];
     const modes: string[] = [];
     let calls = 0;
@@ -182,8 +186,23 @@ describe("top-level approval interaction", () => {
       status: "pending",
       attempt: 0,
     });
-    expect(io.prompts).toHaveLength(1);
-    expect(io.out).not.toContain("Revision feedback:");
+    expect(states[0]?.input).toEqual({ task: "JWT auth" });
+    expect(states[0]?.revisions).toEqual([
+      {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Add validator tests and migration rollback.",
+        requested_at: expect.any(String),
+        status: "pending",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v1.md",
+        },
+      },
+    ]);
+    expect(io.prompts).toHaveLength(3);
+    expect(io.out).toContain("What should be revised?");
+    expect(io.out).toContain("Revision feedback must not be empty.");
   });
 
   test("cancel persists cancellation and never calls the executor again", async () => {
@@ -226,6 +245,33 @@ describe("top-level approval interaction", () => {
     ).toBe(0);
     expect(io.prompts).toHaveLength(2);
     expect(io.out).toContain("Please enter approve, revise, or cancel.");
+  });
+
+  test("EOF while entering feedback leaves the run waiting", async () => {
+    const io = new TestCliIO(["revise", null]);
+    let decisions = 0;
+    const executor: WorkflowExecutor = async (params) =>
+      await persistWaitingApproval(params.state);
+
+    expect(
+      await runCli(["run", "feature", "JWT auth"], {
+        ...baseOptions(io),
+        executor,
+        approvalDecisionApplier: async (params) => {
+          decisions += 1;
+          return params.state;
+        },
+      }),
+    ).toBe(1);
+    expect(decisions).toBe(0);
+    expect(io.out).toContain("What should be revised?");
+    expect(io.error).toContain(
+      "approval input closed; run remains waiting",
+    );
+    const runId = (await listRunIds(paths.runsDir))[0] ?? "";
+    const persisted = await loadRun(paths.runsDir, runId);
+    expect(persisted.status).toBe("waiting");
+    expect(persisted.revisions).toBeUndefined();
   });
 
   test("EOF leaves the run waiting and never applies a decision", async () => {

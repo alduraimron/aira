@@ -6,6 +6,7 @@ export const TEMPLATE_CONTEXT_NAMESPACES = [
   "input",
   "config",
   "artifacts",
+  "revision",
   "steps",
   "run",
 ] as const;

@@ -1,3 +1,7 @@
+import {
+  getPendingRevision,
+  isPendingRevisionResumeState,
+} from "../run/revisions";
 import type { RunState, StepState } from "../run/types";
 import type { LoopStep, Workflow, WorkflowStep } from "../workflow/types";
 import { ExecutionError } from "./errors";
@@ -6,6 +10,25 @@ export interface PreparedInterruptedRun {
   state: RunState;
   /** The interrupted loop iteration that must be replayed without incrementing it. */
   replayLoopId?: string;
+}
+
+export function prepareRunForResume(
+  workflow: Workflow,
+  state: RunState,
+): PreparedInterruptedRun {
+  if (state.status === "interrupted") {
+    return prepareInterruptedRunForResume(workflow, state);
+  }
+
+  if (isPendingRevisionResumeState(state)) {
+    return preparePendingRevisionForResume(workflow, state);
+  }
+
+  throw new ExecutionError(
+    `run "${state.id}" must have status "interrupted" or a pending ` +
+      `revision checkpoint before resume; found "${state.status}"`,
+    { runId: state.id },
+  );
 }
 
 /**
@@ -67,6 +90,70 @@ export function prepareInterruptedRunForResume(
       status: "running",
       current_step: point.step.id,
       steps,
+    },
+  };
+}
+
+function preparePendingRevisionForResume(
+  workflow: Workflow,
+  state: RunState,
+): PreparedInterruptedRun {
+  if (state.workflow !== workflow.name) {
+    throw new ExecutionError(
+      `run "${state.id}" was created for workflow "${state.workflow}" but ` +
+        `resume received "${workflow.name}"`,
+      { runId: state.id },
+    );
+  }
+
+  const revision = getPendingRevision(state);
+
+  if (revision === undefined) {
+    throw new ExecutionError(
+      `run "${state.id}" has no pending revision to resume`,
+      { runId: state.id },
+    );
+  }
+
+  const index = workflow.steps.findIndex(
+    (step) => step.id === revision.target_step,
+  );
+  const step = workflow.steps[index];
+
+  if (index < 0 || step?.uses !== "agent") {
+    throw new ExecutionError(
+      `pending revision target "${revision.target_step}" is not a ` +
+        "top-level agent step",
+      { runId: state.id, stepId: revision.target_step },
+    );
+  }
+
+  validateEarlierTopLevelSteps(workflow, state, index);
+  const stepState = getStepState(state, step.id);
+
+  if (
+    stepState === undefined ||
+    (stepState.status !== "pending" && stepState.status !== "running")
+  ) {
+    throw new ExecutionError(
+      `pending revision step "${step.id}" must be pending or running; ` +
+        `found "${stepState?.status ?? "missing"}"`,
+      { runId: state.id, stepId: step.id },
+    );
+  }
+
+  return {
+    state: {
+      ...state,
+      status: "running",
+      current_step: step.id,
+      steps:
+        stepState.status === "running"
+          ? {
+              ...state.steps,
+              [step.id]: resetExecutionState(stepState),
+            }
+          : state.steps,
     },
   };
 }

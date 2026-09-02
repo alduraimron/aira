@@ -23,6 +23,9 @@ const context: TemplateContext = {
   artifacts: {
     review: "approved",
   },
+  revision: {
+    active: false,
+  },
   steps: {
     verify: {
       success: false,

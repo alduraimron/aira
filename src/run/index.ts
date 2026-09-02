@@ -3,6 +3,7 @@ export * from "./id";
 export * from "./list";
 export * from "./paths";
 export * from "./persistence";
+export * from "./revisions";
 export * from "./schema";
 export * from "./state";
 export * from "./types";

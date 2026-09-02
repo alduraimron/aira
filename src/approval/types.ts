@@ -11,5 +11,6 @@ export interface ApplyApprovalDecisionParams {
   state: RunState;
   stepId: string;
   decision: ApprovalDecision;
+  feedback?: string;
   now?: () => Date;
 }

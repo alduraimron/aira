@@ -257,7 +257,9 @@ describe("V1 default workflow smoke tests", () => {
     await initializeThroughCli();
     const paths = getAiraProjectPaths(directory);
     const runtime = createRecordingAgentRuntime();
-    const io = new TestCliIO(["revise", "approve"]);
+    const feedback =
+      "Do not change PDF export. Add validator tests and rollback coverage.";
+    const io = new TestCliIO(["revise", feedback, "approve"]);
 
     expect(
       await runCli(["run", "feature", "Implement JWT authentication"], {
@@ -280,13 +282,32 @@ describe("V1 default workflow smoke tests", () => {
       "review",
       "summary",
     ]);
+    const planRequests = runtime.requests.filter(
+      (request) => request.stepId === "plan",
+    );
+
     expect(state.status).toBe("completed");
+    expect(state.input).toEqual({ task: "Implement JWT authentication" });
     expect(state.steps.plan).toMatchObject({
       status: "completed",
       attempt: 2,
       artifact: "artifacts/plan-v2.md",
     });
     expect(state.steps["approve-plan"]?.result).toBe("approved");
+    expect(state.revisions).toEqual([
+      {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback,
+        requested_at: expect.any(String),
+        status: "resolved",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v1.md",
+        },
+        resolved_at: expect.any(String),
+      },
+    ]);
     expect(state.artifacts.plan).toEqual({
       current: "artifacts/plan-v2.md",
       versions: ["artifacts/plan-v1.md", "artifacts/plan-v2.md"],
@@ -295,7 +316,18 @@ describe("V1 default workflow smoke tests", () => {
       .toContain("plan attempt 1");
     expect(await readFile(path.join(artifactsDir, "plan-v2.md"), "utf8"))
       .toContain("plan attempt 2");
-    expect(io.prompts).toHaveLength(2);
+    expect(planRequests).toHaveLength(2);
+    expect(planRequests[0]?.prompt).not.toContain(
+      "This step is revising an artifact after human review.",
+    );
+    expect(planRequests[1]?.prompt).toContain(
+      "This step is revising an artifact after human review.",
+    );
+    expect(planRequests[1]?.prompt).toContain(feedback);
+    expect(planRequests[1]?.prompt).toContain(
+      "# plan\n\nplan attempt 1",
+    );
+    expect(io.prompts).toHaveLength(3);
   });
 
   test("runs investigate with a read-only tool allowlist", async () => {

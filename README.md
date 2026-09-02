@@ -46,7 +46,7 @@ aira run feature "Implement JWT authentication" --dry-run
 aira run feature "Implement JWT authentication"
 ```
 
-The feature workflow pauses after planning. Enter `approve`, `revise`, or `cancel` at the prompt. A second `aira init` reports that Aira is already initialized and leaves every existing file unchanged.
+The feature workflow pauses after planning. Enter `approve`, `revise`, or `cancel` at the prompt. Choosing `revise` asks for a non-empty revision instruction before the run continues. A second `aira init` reports that Aira is already initialized and leaves every existing file unchanged.
 
 Use `--allow-dirty` when you intentionally want to start a run in a dirty Git worktree:
 
@@ -108,7 +108,23 @@ review.md
 summary.md
 ```
 
-Revising the plan writes `plan-v2.md`, then returns to the same approval.
+Revising the plan asks for human feedback, writes `plan-v2.md`, then returns to the same approval. Another revision uses `plan-v2.md` as its previous plan and writes `plan-v3.md`.
+
+### Approval revisions
+
+An approval with `revise: plan` records the feedback, target step, approval step, request time, and exact previous artifact path in `run.json`. Aira then resets the replay range and reruns `plan`. The original `input.task` is never changed.
+
+The target agent receives an `[Aira revision context]` prompt section with the human feedback and previous artifact content. Aira also exposes the same data to strict templates through:
+
+```text
+revision.active
+revision.feedback
+revision.previous_artifact
+revision.previous_artifact_name
+revision.previous_artifact_path
+```
+
+These fields are false or empty outside the intended target execution. After the target succeeds, Aira marks the persisted revision record as resolved. Technical retries and resume keep a pending record active. Later steps do not receive the revision prompt section.
 
 ### Bugfix
 
@@ -265,7 +281,7 @@ Each run has its own directory:
 └── logs/
 ```
 
-`run.json` is the source of truth for status, step attempts, current position, and relative artifact paths. Agent artifacts live under `artifacts/`. Versioned artifacts keep ordered paths in run state, and the latest version becomes the current artifact. Session JSONL files record Aira-owned Pi audit events for each attempt.
+`run.json` is the source of truth for status, step attempts, current position, relative artifact paths, and revision history. Revision records retain human feedback and the previous artifact reference after they are resolved. Agent artifacts live under `artifacts/`. Versioned artifacts keep ordered paths in run state, and the latest version becomes the current artifact. Session JSONL files record Aira-owned Pi audit events for each attempt.
 
 ## Interruption and resume
 
@@ -277,7 +293,7 @@ aira resume <run-id>
 
 Aira keeps completed steps, resets the interrupted execution point, and starts a fresh Pi session for a rerun. Interrupting an approval leaves the run waiting; `aira resume` opens the approval again.
 
-Only `interrupted` and supported `waiting` runs can resume. A process crash may leave a run marked `running`; automatic crash recovery is not part of V1. A loop that exhausts all attempts also waits, but manual loop intervention is not supported.
+Interrupted and supported waiting runs can resume. Aira also resumes a running revision checkpoint when `run.json` has a pending revision and its target is pending or running. This covers a process exit after feedback was saved and a crash while the revision target was active. Other runs left `running` still require manual recovery. A loop that exhausts all attempts also waits, but manual loop intervention is not supported.
 
 ## V1 limitations
 

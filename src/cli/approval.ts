@@ -49,9 +49,10 @@ export async function interactWithApproval(params: {
   await displayApproval(params, step);
 
   while (true) {
-    const input = await readApprovalLine(
+    const input = await readInputLine(
       params.io,
       params.sigintSource ?? processSigintSource,
+      "> ",
     );
 
     if (input.kind === "interrupted") {
@@ -76,12 +77,32 @@ export async function interactWithApproval(params: {
       continue;
     }
 
+    let feedback: string | undefined;
+
+    if (decision === "revise") {
+      const feedbackInput = await readRevisionFeedback(
+        params.io,
+        params.sigintSource ?? processSigintSource,
+      );
+
+      if (feedbackInput.kind === "interrupted") {
+        return { kind: "interrupted", state: params.state };
+      }
+
+      if (feedbackInput.kind === "closed") {
+        return { kind: "closed", state: params.state };
+      }
+
+      feedback = feedbackInput.feedback;
+    }
+
     const nextState = await (params.applyDecision ?? applyApprovalDecision)({
       workflow: params.workflow,
       runsRoot: params.runsRoot,
       state: params.state,
       stepId,
       decision,
+      ...(feedback === undefined ? {} : { feedback }),
     });
 
     return decision === "cancel"
@@ -95,9 +116,37 @@ type ApprovalLineResult =
   | { kind: "closed" }
   | { kind: "interrupted" };
 
-async function readApprovalLine(
+async function readRevisionFeedback(
   io: CliIO,
   sigintSource: SigintSource,
+): Promise<
+  | { kind: "feedback"; feedback: string }
+  | { kind: "closed" }
+  | { kind: "interrupted" }
+> {
+  io.writeOut("\nWhat should be revised?\n");
+
+  while (true) {
+    const input = await readInputLine(io, sigintSource, "> ");
+
+    if (input.kind !== "line") {
+      return input;
+    }
+
+    const feedback = input.answer.trim();
+
+    if (feedback.length > 0) {
+      return { kind: "feedback", feedback };
+    }
+
+    io.writeOut("Revision feedback must not be empty.\n");
+  }
+}
+
+async function readInputLine(
+  io: CliIO,
+  sigintSource: SigintSource,
+  prompt: string,
 ): Promise<ApprovalLineResult> {
   const controller = new AbortController();
   let interrupted = false;
@@ -109,7 +158,7 @@ async function readApprovalLine(
   sigintSource.add(handler);
 
   try {
-    const answer = await io.readLine("> ", controller.signal);
+    const answer = await io.readLine(prompt, controller.signal);
 
     if (interrupted) {
       return { kind: "interrupted" };

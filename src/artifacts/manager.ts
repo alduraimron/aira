@@ -34,6 +34,11 @@ export interface ReadArtifactParams {
   name: string;
 }
 
+export interface ReadArtifactVersionParams extends ReadArtifactParams {
+  /** Path relative to the run directory. */
+  path: string;
+}
+
 export async function writeArtifact(
   params: WriteArtifactParams,
 ): Promise<WriteArtifactResult> {
@@ -116,18 +121,39 @@ export async function writeArtifact(
 export async function readArtifact(
   params: ReadArtifactParams,
 ): Promise<string> {
-  const absolutePath = getArtifactAbsolutePath(params);
+  return readStoredArtifact(params, getArtifactAbsolutePath(params));
+}
 
-  try {
-    return await readFile(absolutePath, "utf8");
-  } catch (error) {
-    throw new ArtifactError("Could not read artifact", {
-      runId: params.state.id,
-      artifactName: params.name,
-      filePath: absolutePath,
-      cause: error,
+export async function readArtifactVersion(
+  params: ReadArtifactVersionParams,
+): Promise<string> {
+  const { runsRoot, state, name, path: storedPath } = params;
+  assertArtifactName(name, state.id);
+  const artifact = getExistingArtifactState(state, name);
+
+  if (artifact === undefined) {
+    throw new ArtifactError("Artifact is not present in run state", {
+      runId: state.id,
+      artifactName: name,
     });
   }
+
+  const knownPaths = artifact.versions ?? [artifact.current];
+
+  if (!knownPaths.includes(storedPath)) {
+    throw new ArtifactError("Artifact version is not present in run state", {
+      runId: state.id,
+      artifactName: name,
+      filePath: storedPath,
+    });
+  }
+
+  const absolutePath = resolveStoredArtifactAbsolutePath(
+    getRunPaths(runsRoot, state.id),
+    storedPath,
+    { runId: state.id, artifactName: name },
+  );
+  return readStoredArtifact(params, absolutePath);
 }
 
 export function getArtifactAbsolutePath(
@@ -149,6 +175,22 @@ export function getArtifactAbsolutePath(
     runId: state.id,
     artifactName: name,
   });
+}
+
+async function readStoredArtifact(
+  params: ReadArtifactParams,
+  absolutePath: string,
+): Promise<string> {
+  try {
+    return await readFile(absolutePath, "utf8");
+  } catch (error) {
+    throw new ArtifactError("Could not read artifact", {
+      runId: params.state.id,
+      artifactName: params.name,
+      filePath: absolutePath,
+      cause: error,
+    });
+  }
 }
 
 function getExistingArtifactState(

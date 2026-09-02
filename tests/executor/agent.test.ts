@@ -735,9 +735,10 @@ describe("agent failure semantics", () => {
   });
 });
 
-describe("versioned agent artifacts and continuation", () => {
-  test("revision continuation writes v1 then v2 with the existing artifact manager", async () => {
-    await writeCommand("plan", "Create the plan.");
+describe("versioned agent artifacts and revision context", () => {
+  test("uses the latest feedback and artifact across two revision rounds", async () => {
+    await writeCommand("plan", "Create the plan for {{ input.task }}.");
+    await writeCommand("implement", "Implement {{ input.task }}.");
     const workflow: Workflow = {
       name: "versioned-revision",
       steps: [
@@ -757,19 +758,27 @@ describe("versioned agent artifacts and continuation", () => {
           artifact: "plan",
           revise: "plan",
         },
+        { id: "implement", uses: "agent", command: "implement" },
       ],
     };
     const state = await createState(workflow);
-    let calls = 0;
-    const sessionLogPaths: string[] = [];
+    const requests: AgentStepRequest[] = [];
+    let planCalls = 0;
     const agentRuntime: AgentRuntime = {
       async runStep(request) {
-        calls += 1;
-        sessionLogPaths.push(request.sessionLogPath ?? "");
+        requests.push(request);
+
+        if (request.stepId === "implement") {
+          return completedResult(noArtifactCompletion("Implemented"));
+        }
+
+        planCalls += 1;
         return completedResult({
           status: "completed",
-          summary: `Plan version ${calls}`,
-          artifacts: [{ name: "plan", content: `plan content v${calls}` }],
+          summary: `Plan version ${planCalls}`,
+          artifacts: [
+            { name: "plan", content: `plan content v${planCalls}` },
+          ],
         });
       },
     };
@@ -782,27 +791,56 @@ describe("versioned agent artifacts and continuation", () => {
       commandsDir,
       agentRuntime,
     });
-    const revised = await applyApprovalDecision({
+    const firstFeedback = "Add validator tests and rollback coverage.";
+    const firstRevision = await applyApprovalDecision({
       workflow,
       runsRoot,
       state: firstWaiting,
       stepId: "approve",
       decision: "revise",
+      feedback: firstFeedback,
     });
     const secondWaiting = await executeWorkflow({
       workflow,
       runsRoot,
-      state: revised,
-      context: { config: {}, artifacts: { plan: "stale" } },
+      state: firstRevision,
+      context: { config: {}, artifacts: { plan: "stale caller plan" } },
       cwd,
       commandsDir,
       agentRuntime,
       mode: "continue",
     });
-    const approved = await applyApprovalDecision({
+
+    expect(secondWaiting.status).toBe("waiting");
+    expect(secondWaiting.current_step).toBe("approve");
+
+    const secondFeedback = "Keep PDF export out of scope.";
+    const secondRevision = await applyApprovalDecision({
       workflow,
       runsRoot,
       state: secondWaiting,
+      stepId: "approve",
+      decision: "revise",
+      feedback: secondFeedback,
+    });
+    const thirdWaiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state: secondRevision,
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime,
+      mode: "continue",
+    });
+
+    expect(thirdWaiting.status).toBe("waiting");
+    expect(thirdWaiting.current_step).toBe("approve");
+
+    const approved = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state: thirdWaiting,
       stepId: "approve",
       decision: "approve",
     });
@@ -816,27 +854,189 @@ describe("versioned agent artifacts and continuation", () => {
       agentRuntime,
       mode: "continue",
     });
-    const artifactsDir = getRunPaths(runsRoot, state.id).artifactsDir;
+    const planRequests = requests.filter(
+      (request) => request.stepId === "plan",
+    );
+    const implementRequest = requests.find(
+      (request) => request.stepId === "implement",
+    );
+    const runPaths = getRunPaths(runsRoot, state.id);
 
-    expect(calls).toBe(2);
-    expect(sessionLogPaths).toEqual([
-      path.join(getRunPaths(runsRoot, state.id).sessionsDir, "plan-1.jsonl"),
-      path.join(getRunPaths(runsRoot, state.id).sessionsDir, "plan-2.jsonl"),
+    expect(planCalls).toBe(3);
+    expect(planRequests).toHaveLength(3);
+    expect(planRequests[0]?.prompt).not.toContain(
+      "[Aira revision context]",
+    );
+    expect(planRequests[1]?.prompt).toContain(firstFeedback);
+    expect(planRequests[1]?.prompt).toContain("plan content v1");
+    expect(planRequests[1]?.prompt).not.toContain("stale caller plan");
+    expect(planRequests[2]?.prompt).toContain(secondFeedback);
+    expect(planRequests[2]?.prompt).toContain("plan content v2");
+    expect(planRequests[2]?.prompt).not.toContain("plan content v1");
+    expect(implementRequest?.prompt).not.toContain(
+      "[Aira revision context]",
+    );
+    expect(implementRequest?.prompt).not.toContain(firstFeedback);
+    expect(implementRequest?.prompt).not.toContain(secondFeedback);
+    expect(requests.map((request) => request.sessionLogPath)).toEqual([
+      path.join(runPaths.sessionsDir, "plan-1.jsonl"),
+      path.join(runPaths.sessionsDir, "plan-2.jsonl"),
+      path.join(runPaths.sessionsDir, "plan-3.jsonl"),
+      path.join(runPaths.sessionsDir, "implement-1.jsonl"),
     ]);
     expect(finalState.status).toBe("completed");
+    expect(finalState.input).toEqual({ task: "implement auth" });
     expect(finalState.steps.plan).toMatchObject({
       status: "completed",
-      attempt: 2,
-      summary: "Plan version 2",
-      artifact: "artifacts/plan-v2.md",
+      attempt: 3,
+      summary: "Plan version 3",
+      artifact: "artifacts/plan-v3.md",
     });
     expect(finalState.artifacts.plan).toEqual({
-      current: "artifacts/plan-v2.md",
-      versions: ["artifacts/plan-v1.md", "artifacts/plan-v2.md"],
+      current: "artifacts/plan-v3.md",
+      versions: [
+        "artifacts/plan-v1.md",
+        "artifacts/plan-v2.md",
+        "artifacts/plan-v3.md",
+      ],
     });
-    expect(await readFile(path.join(artifactsDir, "plan-v1.md"), "utf8"))
+    expect(finalState.revisions).toEqual([
+      {
+        approval_step: "approve",
+        target_step: "plan",
+        feedback: firstFeedback,
+        requested_at: expect.any(String),
+        status: "resolved",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v1.md",
+        },
+        resolved_at: expect.any(String),
+      },
+      {
+        approval_step: "approve",
+        target_step: "plan",
+        feedback: secondFeedback,
+        requested_at: expect.any(String),
+        status: "resolved",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v2.md",
+        },
+        resolved_at: expect.any(String),
+      },
+    ]);
+    expect(await readFile(path.join(runPaths.artifactsDir, "plan-v1.md"), "utf8"))
       .toBe("plan content v1");
-    expect(await readFile(path.join(artifactsDir, "plan-v2.md"), "utf8"))
+    expect(await readFile(path.join(runPaths.artifactsDir, "plan-v2.md"), "utf8"))
       .toBe("plan content v2");
+    expect(await readFile(path.join(runPaths.artifactsDir, "plan-v3.md"), "utf8"))
+      .toBe("plan content v3");
+  });
+
+  test("retains revision context across a technical retry", async () => {
+    await writeCommand("plan", "Create the plan.");
+    const workflow: Workflow = {
+      name: "revision-retry",
+      steps: [
+        {
+          id: "plan",
+          uses: "agent",
+          command: "plan",
+          retry: 1,
+          artifact: {
+            name: "plan",
+            filename: "plan.md",
+            versioned: true,
+          },
+        },
+        {
+          id: "approve",
+          uses: "approval",
+          artifact: "plan",
+          revise: "plan",
+        },
+      ],
+    };
+    const state = await createState(workflow);
+    const prompts: string[] = [];
+    const revisionSnapshots: RunState[] = [];
+    let calls = 0;
+    const agentRuntime: AgentRuntime = {
+      async runStep(request) {
+        calls += 1;
+        prompts.push(request.prompt);
+
+        if (calls > 1) {
+          revisionSnapshots.push(await loadRun(runsRoot, state.id));
+        }
+
+        if (calls === 2) {
+          return {
+            success: false,
+            sessionId: "revision-retry-failure",
+            finalText: "partial revision",
+            timedOut: false,
+            error: "provider unavailable",
+          };
+        }
+
+        const version = calls === 1 ? 1 : 2;
+        return completedResult({
+          status: "completed",
+          summary: `Plan version ${version}`,
+          artifacts: [{ name: "plan", content: `plan content v${version}` }],
+        });
+      },
+    };
+    const firstWaiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state,
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime,
+    });
+    const feedback = "Add explicit migration rollback steps.";
+    const revised = await applyApprovalDecision({
+      workflow,
+      runsRoot,
+      state: firstWaiting,
+      stepId: "approve",
+      decision: "revise",
+      feedback,
+    });
+    const secondWaiting = await executeWorkflow({
+      workflow,
+      runsRoot,
+      state: revised,
+      context: { config: {} },
+      cwd,
+      commandsDir,
+      agentRuntime,
+      mode: "continue",
+    });
+
+    expect(calls).toBe(3);
+    expect(prompts[1]).toContain(feedback);
+    expect(prompts[1]).toContain("plan content v1");
+    expect(prompts[2]).toBe(prompts[1]);
+    expect(revisionSnapshots).toHaveLength(2);
+    expect(
+      revisionSnapshots.every(
+        (snapshot) => snapshot.revisions?.[0]?.status === "pending",
+      ),
+    ).toBe(true);
+    expect(secondWaiting.status).toBe("waiting");
+    expect(secondWaiting.steps.plan).toMatchObject({
+      status: "completed",
+      attempt: 3,
+      artifact: "artifacts/plan-v2.md",
+    });
+    expect(secondWaiting.revisions?.[0]).toMatchObject({
+      status: "resolved",
+      feedback,
+    });
   });
 });

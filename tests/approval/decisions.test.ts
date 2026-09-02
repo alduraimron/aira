@@ -38,7 +38,7 @@ async function createState(
   return createRun({
     runsRoot,
     workflow: workflowName,
-    input: {},
+    input: { task: "Original workflow task" },
     stepIds,
     now: new Date("2026-08-26T10:55:01.000Z"),
   });
@@ -280,6 +280,8 @@ describe("approval decisions", () => {
       state,
       stepId: "approve-plan",
       decision: "revise",
+      feedback:
+        "  Do not change PDF export. Add rollback and validator tests.  ",
       now: () => new Date("2026-08-26T11:30:00.000Z"),
     });
 
@@ -303,10 +305,65 @@ describe("approval decisions", () => {
       attempt: 0,
     });
     expect(revised.artifacts).toEqual(stateBefore.artifacts);
+    expect(revised.input).toEqual({ task: "Original workflow task" });
+    expect(revised.revisions).toEqual([
+      {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback:
+          "Do not change PDF export. Add rollback and validator tests.",
+        requested_at: "2026-08-26T11:30:00.000Z",
+        status: "pending",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v1.md",
+        },
+      },
+    ]);
     expect(revised.updated_at).toBe("2026-08-26T11:30:00.000Z");
     expect(state).toEqual(stateBefore);
     expect(await loadRun(runsRoot, state.id)).toEqual(revised);
   });
+
+  test.each([undefined, "", "   \n\t"])(
+    "rejects empty revision feedback %p without changing state",
+    async (feedback) => {
+      const workflow: Workflow = {
+        name: "revision-feedback",
+        steps: [
+          { id: "plan", uses: "agent", command: "plan" },
+          {
+            id: "approve-plan",
+            uses: "approval",
+            revise: "plan",
+          },
+        ],
+      };
+      const state = await createWaitingState(workflow, "approve-plan");
+
+      await saveRun(
+        runsRoot,
+        state,
+        new Date("2026-08-26T11:05:00.000Z"),
+      );
+      const stateBefore = structuredClone(state);
+      const sourceBefore = await readPersistedSource(state);
+      const error = await expectApprovalError(() =>
+        applyApprovalDecision({
+          workflow,
+          runsRoot,
+          state,
+          stepId: "approve-plan",
+          decision: "revise",
+          ...(feedback === undefined ? {} : { feedback }),
+        }),
+      );
+
+      expect(error.message).toContain("revision feedback must not be empty");
+      expect(state).toEqual(stateBefore);
+      expect(await readPersistedSource(state)).toBe(sourceBefore);
+    },
+  );
 
   test("rejects revise when the approval has no revision target", async () => {
     const workflow: Workflow = {

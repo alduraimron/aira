@@ -6,9 +6,12 @@ import {
 } from "../artifacts/paths";
 import { RUN_ID_PATTERN } from "./id";
 import {
+  REVISION_STATUSES,
   RUN_STATUSES,
   STEP_STATUSES,
   type ArtifactState,
+  type RevisionArtifactReference,
+  type RevisionRecord,
   type RunState,
   type StepState,
 } from "./types";
@@ -83,20 +86,85 @@ const artifactNameSchema = z.string().regex(ARTIFACT_NAME_PATTERN, {
   message: `artifact name must match ${ARTIFACT_NAME_PATTERN.source}`,
 });
 
-export const runStateSchema: z.ZodType<RunState> = z.strictObject({
-  version: z.literal(1),
-  id: z.string().regex(RUN_ID_PATTERN, {
-    message: `run ID must match ${RUN_ID_PATTERN.source}`,
-  }),
-  workflow: z.string(),
-  status: runStatusSchema,
-  input: z.record(z.string(), z.unknown()),
-  current_step: z.string().optional(),
-  started_at: isoTimestampSchema,
-  updated_at: isoTimestampSchema,
-  steps: z.record(z.string(), stepStateSchema),
-  artifacts: z.record(artifactNameSchema, artifactStateSchema),
-});
+export const revisionArtifactReferenceSchema: z.ZodType<RevisionArtifactReference> =
+  z.strictObject({
+    name: artifactNameSchema,
+    path: storedArtifactPathSchema,
+  });
+
+export const revisionRecordSchema: z.ZodType<RevisionRecord> = z
+  .strictObject({
+    approval_step: z.string().min(1),
+    target_step: z.string().min(1),
+    feedback: z.string().refine((value) => value.trim().length > 0, {
+      message: "revision feedback must not be empty",
+    }),
+    requested_at: isoTimestampSchema,
+    status: z.enum(REVISION_STATUSES),
+    previous_artifact: revisionArtifactReferenceSchema.optional(),
+    resolved_at: isoTimestampSchema.optional(),
+  })
+  .superRefine((revision, context) => {
+    if (revision.status === "pending" && revision.resolved_at !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["resolved_at"],
+        message: "pending revision must not have a resolution timestamp",
+      });
+    }
+
+    if (revision.status === "resolved" && revision.resolved_at === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["resolved_at"],
+        message: "resolved revision must have a resolution timestamp",
+      });
+    }
+  });
+
+export const runStateSchema: z.ZodType<RunState> = z
+  .strictObject({
+    version: z.literal(1),
+    id: z.string().regex(RUN_ID_PATTERN, {
+      message: `run ID must match ${RUN_ID_PATTERN.source}`,
+    }),
+    workflow: z.string(),
+    status: runStatusSchema,
+    input: z.record(z.string(), z.unknown()),
+    current_step: z.string().optional(),
+    started_at: isoTimestampSchema,
+    updated_at: isoTimestampSchema,
+    steps: z.record(z.string(), stepStateSchema),
+    artifacts: z.record(artifactNameSchema, artifactStateSchema),
+    revisions: z.array(revisionRecordSchema).min(1).optional(),
+  })
+  .superRefine((state, context) => {
+    const revisions = state.revisions ?? [];
+    const pendingIndexes = revisions.flatMap((revision, index) =>
+      revision.status === "pending" ? [index] : [],
+    );
+
+    if (pendingIndexes.length > 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["revisions"],
+        message: "run state must not contain more than one pending revision",
+      });
+    }
+
+    const pendingIndex = pendingIndexes[0];
+
+    if (
+      pendingIndex !== undefined &&
+      pendingIndex !== revisions.length - 1
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["revisions", pendingIndex],
+        message: "a pending revision must be the latest revision record",
+      });
+    }
+  });
 
 function isValidIsoUtcTimestamp(value: string): boolean {
   const match = ISO_UTC_TIMESTAMP_PATTERN.exec(value);

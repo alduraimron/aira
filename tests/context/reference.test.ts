@@ -22,6 +22,10 @@ const context: TemplateContext = {
   artifacts: {
     plan: "Approved plan",
   },
+  revision: {
+    active: true,
+    feedback: "Add rollback tests",
+  },
   steps: {
     verify: {
       output: "2 tests failed",
@@ -51,6 +55,7 @@ describe("template context reference resolution", () => {
     ["input.task", "Implement JWT authentication"],
     ["config.commands.test", "bun test"],
     ["artifacts.plan", "Approved plan"],
+    ["revision.feedback", "Add rollback tests"],
     ["steps.verify.output", "2 tests failed"],
     ["run.id", "run-123"],
     ["config.feature-enabled", true],

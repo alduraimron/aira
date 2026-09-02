@@ -200,6 +200,11 @@ describe("V1 default project files", () => {
             input: { task: "Implement JWT authentication" },
             config: { ...config },
             artifacts,
+            revision: {
+              active: false,
+              feedback: "",
+              previous_artifact: "",
+            },
             steps,
             run: {
               id: "20260827-120000-a1b2c3d4",
@@ -223,6 +228,11 @@ describe("V1 default project files", () => {
         artifacts: {
           discovery: "repository evidence",
           plan: "approved repair plan",
+        },
+        revision: {
+          active: false,
+          feedback: "",
+          previous_artifact: "",
         },
         steps: {
           verify: {
@@ -263,6 +273,9 @@ describe("V1 default project files", () => {
         READ_ONLY_TOOLS,
       );
     }
+    expect(requireCommand(commands, "plan").prompt).toContain(
+      "revise the previous implementation plan according to the human feedback",
+    );
     for (const name of ["implement", "repair"]) {
       expect(requireCommand(commands, name).metadata.tools).toEqual(
         MUTATION_TOOLS,

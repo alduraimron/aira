@@ -74,6 +74,104 @@ describe("run state schema", () => {
     expect(runStateSchema.parse(state)).toEqual(state);
   });
 
+  test("accepts pending and resolved revision history", () => {
+    const state = makeState();
+    state.revisions = [
+      {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Add rollback coverage",
+        requested_at: timestamp,
+        status: "resolved",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v1.md",
+        },
+        resolved_at: "2026-08-26T10:56:00.000Z",
+      },
+      {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Keep PDF export out of scope",
+        requested_at: "2026-08-26T10:57:00.000Z",
+        status: "pending",
+        previous_artifact: {
+          name: "plan",
+          path: "artifacts/plan-v2.md",
+        },
+      },
+    ];
+
+    expect(runStateSchema.parse(state)).toEqual(state);
+  });
+
+  test.each([
+    {
+      label: "empty feedback",
+      revision: {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "   ",
+        requested_at: timestamp,
+        status: "pending",
+      },
+    },
+    {
+      label: "pending revision with resolved_at",
+      revision: {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Revise it",
+        requested_at: timestamp,
+        status: "pending",
+        resolved_at: timestamp,
+      },
+    },
+    {
+      label: "resolved revision without resolved_at",
+      revision: {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Revise it",
+        requested_at: timestamp,
+        status: "resolved",
+      },
+    },
+    {
+      label: "unsafe previous artifact path",
+      revision: {
+        approval_step: "approve-plan",
+        target_step: "plan",
+        feedback: "Revise it",
+        requested_at: timestamp,
+        status: "pending",
+        previous_artifact: { name: "plan", path: "../plan.md" },
+      },
+    },
+  ])("rejects revision state with $label", ({ revision }) => {
+    expect(
+      runStateSchema.safeParse({ ...makeState(), revisions: [revision] })
+        .success,
+    ).toBe(false);
+  });
+
+  test("rejects more than one pending revision", () => {
+    const pending = {
+      approval_step: "approve-plan",
+      target_step: "plan",
+      feedback: "Revise it",
+      requested_at: timestamp,
+      status: "pending",
+    };
+
+    expect(
+      runStateSchema.safeParse({
+        ...makeState(),
+        revisions: [pending, { ...pending, feedback: "Revise again" }],
+      }).success,
+    ).toBe(false);
+  });
+
   test("rejects a wrong version", () => {
     expect(
       runStateSchema.safeParse({ ...makeState(), version: 2 }).success,

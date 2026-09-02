@@ -49,6 +49,8 @@ Discovery:
 
 Create a plan grounded in the task, the discovery artifact, and any focused read-only inspection needed to confirm details.
 
+If an [Aira revision context] section follows this command, revise the previous implementation plan according to the human feedback. Preserve parts that remain valid. Change only what is necessary to address the feedback. Keep the original task and discovery as constraints.
+
 Do not implement or edit files. Name concrete files, functions, and modules when the evidence supports them. Mark uncertain files or APIs as uncertain instead of inventing them. For a defect, address the root cause with the smallest safe correction. For a feature, use existing extension points where practical. Preserve the existing architecture unless the plan gives a specific reason not to.
 
 The \`plan\` artifact must use these sections:
