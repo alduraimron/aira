@@ -37,6 +37,11 @@ export const AIRA_SESSION_ENTRY_TYPE = "aira.active-run";
 const AIRA_SESSION_ENTRY_VERSION = 1;
 const APPROVAL_ARTIFACT_MAX_BYTES = 12 * 1024;
 const APPROVAL_ARTIFACT_MAX_LINES = 300;
+const START_BRIEF_SUMMARY_CHARACTERS = 180;
+const APPROVAL_MESSAGE_SUMMARY_CHARACTERS = 240;
+const REVISION_FEEDBACK_MAX_BYTES = 2 * 1024;
+const REVISION_FEEDBACK_MAX_LINES = 12;
+const REVISION_FEEDBACK_LONG_LINE_CHARACTERS = 800;
 const ARTIFACT_CONTENT_MAX_BYTES = DEFAULT_MAX_BYTES - 2 * 1024;
 const ARTIFACT_CONTENT_MAX_LINES = DEFAULT_MAX_LINES - 12;
 const RENDER_PREVIEW_LINES = 30;
@@ -473,11 +478,14 @@ export function registerAiraPiExtension(
         return boundaryResult(boundary, progress.render(), "start");
       });
     },
-    renderCall(args, theme) {
+    renderCall(args, theme, context) {
       let text = theme.fg("toolTitle", theme.bold("aira start "));
       text += theme.fg("accent", args.workflow ?? "");
       if (args.allowDirty === true) {
         text += theme.fg("warning", " allow-dirty");
+      }
+      if (context.expanded && args.task) {
+        text += `\n${theme.fg("dim", `Execution brief:\n${args.task}`)}`;
       }
       return new Text(text, 0, 0);
     },
@@ -570,9 +578,12 @@ export function registerAiraPiExtension(
         }
 
         const feedback =
-          params.action === "revise" ? (params.feedback ?? "").trim() : undefined;
+          params.action === "revise" ? (params.feedback ?? "") : undefined;
 
-        if (params.action === "revise" && feedback?.length === 0) {
+        if (
+          params.action === "revise" &&
+          (feedback === undefined || feedback.trim().length === 0)
+        ) {
           throw new InvalidRevisionFeedbackError(selected.view.runId);
         }
 
@@ -928,6 +939,10 @@ function formatStartPreview(preview: RunPreview, allowDirty: boolean): string {
     `Project: ${preview.projectRoot}`,
     `Steps: ${flattenPreviewSteps(preview.steps).map((step) => step.id).join(" → ")}`,
     `Dirty worktree: ${allowDirty ? "allowed" : "refused"}`,
+    "",
+    "Execution brief:",
+    preview.task,
+    "",
     "Waiting for human authorization.",
   ].join("\n");
 }
@@ -936,15 +951,45 @@ function formatStartAuthorization(
   preview: RunPreview,
   allowDirty: boolean,
 ): string {
+  const steps = flattenPreviewSteps(preview.steps);
+  const summary = summarizeAuthorizationText(
+    preview.task,
+    START_BRIEF_SUMMARY_CHARACTERS,
+  );
   return [
     `Project: ${preview.projectRoot}`,
     `Workflow: ${preview.workflow.name}`,
-    `Steps: ${flattenPreviewSteps(preview.steps).map((step) => `${step.id} (${step.type})`).join(", ")}`,
+    `Steps: ${steps.length}`,
     `Allow dirty worktree: ${allowDirty ? "yes" : "no"}`,
-    "",
-    "Execution brief:",
-    preview.task,
+    `Brief summary: ${summary.text}`,
+    ...(summary.truncated
+      ? [
+          `Brief summary truncated: ${summary.shownCharacters} of ${summary.totalCharacters} characters shown. Review the complete brief in the Aira tool preview.`,
+        ]
+      : []),
+    "Confirming creates and starts a new Aira run.",
   ].join("\n");
+}
+
+function summarizeAuthorizationText(
+  value: string,
+  maxCharacters: number,
+): {
+  text: string;
+  truncated: boolean;
+  shownCharacters: number;
+  totalCharacters: number;
+} {
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    text: sanitizeDisplayText(value, maxCharacters),
+    truncated: normalized.length > maxCharacters,
+    shownCharacters: Math.min(normalized.length, maxCharacters),
+    totalCharacters: normalized.length,
+  };
 }
 
 function flattenPreviewSteps(steps: readonly RunPreviewStep[]): RunPreviewStep[] {
@@ -1056,26 +1101,33 @@ function authorizationMessage(
   switch (action) {
     case "approve": {
       const artifact = approval?.artifact;
-      const lines = [
+      const version =
+        artifact?.available === true
+          ? artifact.versions.find((candidate) => candidate.isCurrent)?.version
+          : undefined;
+      const message = summarizeAuthorizationText(
+        approval?.message ?? "Approve this Aira boundary?",
+        APPROVAL_MESSAGE_SUMMARY_CHARACTERS,
+      );
+      return [
         `Run: ${view.runId}`,
         `Workflow: ${view.workflow}`,
         `Approval step: ${approval?.stepId ?? view.currentStep?.id ?? "unknown"}`,
-        `Message: ${approval?.message ?? "Approve this Aira boundary?"}`,
+        `Message: ${message.text}`,
+        ...(message.truncated
+          ? [
+              `Approval message truncated: ${message.shownCharacters} of ${message.totalCharacters} characters shown. Review the complete boundary before confirming.`,
+            ]
+          : []),
         `Artifact: ${artifact?.name ?? "none"}`,
-      ];
-
-      if (artifact?.available === true) {
-        const preview = truncateHead(artifact.content, {
-          maxBytes: APPROVAL_ARTIFACT_MAX_BYTES,
-          maxLines: APPROVAL_ARTIFACT_MAX_LINES,
-        });
-        lines.push(`Path: ${artifact.currentPath}`, "", preview.content);
-        if (preview.truncated) {
-          lines.push("", "Artifact preview is truncated. Inspect it with aira_artifact before approving.");
-        }
-      }
-
-      return lines.join("\n");
+        ...(artifact?.available === true
+          ? [
+              `Artifact path: ${artifact.currentPath}`,
+              ...(version === undefined ? [] : [`Artifact version: ${version}`]),
+            ]
+          : []),
+        "Confirming approves this boundary and continues Aira execution.",
+      ].join("\n");
     }
     case "revise":
       return [
@@ -1083,9 +1135,7 @@ function authorizationMessage(
         `Workflow: ${view.workflow}`,
         `Approval step: ${approval?.stepId ?? view.currentStep?.id ?? "unknown"}`,
         `Artifact: ${approval?.artifact?.name ?? "none"}`,
-        "",
-        "Exact revision feedback to submit:",
-        feedback ?? "",
+        ...formatRevisionFeedbackAuthorization(feedback ?? ""),
       ].join("\n");
     case "cancel":
       return [
@@ -1102,6 +1152,34 @@ function authorizationMessage(
         "Aira will rerun the supported execution point in a fresh worker session.",
       ].join("\n");
   }
+}
+
+function formatRevisionFeedbackAuthorization(feedback: string): string[] {
+  const preview = truncateHead(feedback, {
+    maxBytes: REVISION_FEEDBACK_MAX_BYTES,
+    maxLines: REVISION_FEEDBACK_MAX_LINES,
+  });
+
+  if (!preview.truncated) {
+    return ["", "Exact revision feedback to submit:", feedback];
+  }
+
+  const displayed = preview.firstLineExceedsLimit
+    ? truncateLine(
+        feedback.split(/\r\n|\n|\r/, 1)[0] ?? "",
+        REVISION_FEEDBACK_LONG_LINE_CHARACTERS,
+      ).text
+    : preview.content;
+  const shownLines = preview.firstLineExceedsLimit ? 1 : preview.outputLines;
+  const shownBytes = Buffer.byteLength(displayed, "utf8");
+  return [
+    "",
+    "Revision feedback preview (truncated):",
+    displayed,
+    "",
+    `Preview truncated: showing ${shownLines} of ${preview.totalLines} lines and ${formatSize(shownBytes)} of ${formatSize(preview.totalBytes)}.`,
+    "Confirming submits the exact unmodified feedback, not only this preview.",
+  ];
 }
 
 function boundaryResult(
@@ -1471,6 +1549,18 @@ function renderAiraResult(
     return new Text(theme.fg("error", fallback || "Aira tool failed"), 0, 0);
   }
 
+  if (details?.kind === "preview") {
+    const summary = theme.fg(
+      "warning",
+      `Review Aira start · ${details.preview.workflow.name} · ${flattenPreviewSteps(details.preview.steps).length} steps`,
+    );
+    return new Text(
+      summary + (options.expanded ? `\n${theme.fg("dim", fallback)}` : ""),
+      0,
+      0,
+    );
+  }
+
   if (options.isPartial || details?.kind === "progress") {
     return new Text(theme.fg("warning", fallback || "Aira is working..."), 0, 0);
   }
@@ -1493,8 +1583,6 @@ function renderAiraResult(
           : "";
       return new Text(title + extra, 0, 0);
     }
-    case "preview":
-      return new Text(theme.fg("warning", "Waiting for authorization"), 0, 0);
     case "status":
       return new Text(
         details.run === undefined

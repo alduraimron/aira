@@ -4,6 +4,7 @@ import path from "node:path";
 
 import {
   AiraCore,
+  InvalidLifecycleActionError,
   type CoreExecutionOptions,
   type ContinueRunInput,
   type PreviewRunInput,
@@ -75,8 +76,35 @@ function interruptedView(): RunView {
   };
 }
 
+function completedView(): RunView {
+  const boundary = completedBoundary();
+  return {
+    runId,
+    workflow: "feature",
+    checkpointToken: boundary.checkpointToken,
+    status: "completed",
+    task: "task",
+    startedAt: "2026-09-06T12:00:00.000Z",
+    updatedAt: "2026-09-06T12:01:00.000Z",
+    summary: boundary.summary,
+    steps: [{ id: "work", type: "shell", status: "completed", attempt: 1 }],
+    artifacts: [],
+    allowedActions: [],
+    resumable: false,
+    workflowAvailable: true,
+    boundary,
+  };
+}
+
 class RecordingCore extends AiraCore {
-  readonly calls: Array<{ method: string; input?: unknown }> = [];
+  readonly calls: Array<{
+    method: string;
+    input?: unknown;
+    execution?: CoreExecutionOptions;
+  }> = [];
+  view: RunView | undefined = interruptedView();
+  continueError?: Error;
+  emitContinueEvent = false;
 
   constructor() {
     super({ cwd: root });
@@ -132,14 +160,27 @@ class RecordingCore extends AiraCore {
 
   override async inspectRun(requestedRunId?: string): Promise<RunView | undefined> {
     this.calls.push({ method: "inspectRun", input: requestedRunId });
-    return requestedRunId === runId ? interruptedView() : undefined;
+    return requestedRunId === runId ? this.view : undefined;
   }
 
   override async continueRun(
     input: ContinueRunInput,
-    _execution?: CoreExecutionOptions,
+    execution?: CoreExecutionOptions,
   ): Promise<RunBoundary> {
-    this.calls.push({ method: "continueRun", input });
+    this.calls.push({ method: "continueRun", input, execution });
+
+    if (this.emitContinueEvent) {
+      execution?.onEvent?.({
+        type: "step.started",
+        stepId: "work",
+        stepType: "shell",
+      });
+    }
+
+    if (this.continueError !== undefined) {
+      throw this.continueError;
+    }
+
     return completedBoundary();
   }
 }
@@ -190,6 +231,80 @@ describe("CLI Core delegation", () => {
       action: "resume",
       expectedBoundaryToken: "checkpoint-interrupted",
     });
+  });
+
+  test("valid resume invokes Core once with checkpoint, signal, and reporter", async () => {
+    const core = new RecordingCore();
+    core.emitContinueEvent = true;
+    const io = new TestCliIO();
+    const signals = new TestSigintSource();
+
+    expect(
+      await runCli(["resume", runId], {
+        core,
+        io,
+        sigintSource: signals,
+      }),
+    ).toBe(0);
+
+    const continuationCalls = core.calls.filter(
+      (call) => call.method === "continueRun",
+    );
+    expect(continuationCalls).toHaveLength(1);
+    expect(continuationCalls[0]?.input).toEqual({
+      runId,
+      action: "resume",
+      expectedBoundaryToken: "checkpoint-interrupted",
+    });
+    expect(continuationCalls[0]?.execution?.signal).toBeInstanceOf(AbortSignal);
+    expect(continuationCalls[0]?.execution?.onEvent).toBeFunction();
+    expect(io.out).toContain("● work");
+    expect(signals.addCalls).toBe(1);
+    expect(signals.removeCalls).toBe(1);
+    expect(signals.handlers.size).toBe(0);
+  });
+
+  test("non-resumable state gets one guarded Core rejection, never a probe call", async () => {
+    const core = new RecordingCore();
+    core.view = completedView();
+    core.continueError = new InvalidLifecycleActionError({
+      runId,
+      action: "resume",
+      message: `run "${runId}" is "completed" and cannot be resumed`,
+    });
+    const io = new TestCliIO();
+    const signals = new TestSigintSource();
+
+    expect(
+      await runCli(["resume", runId], {
+        core,
+        io,
+        sigintSource: signals,
+      }),
+    ).toBe(1);
+
+    const continuationCalls = core.calls.filter(
+      (call) => call.method === "continueRun",
+    );
+    expect(continuationCalls).toHaveLength(1);
+    expect(continuationCalls[0]?.input).toEqual({
+      runId,
+      action: "resume",
+      expectedBoundaryToken: "checkpoint-completed",
+    });
+    expect(continuationCalls[0]?.execution?.signal).toBeInstanceOf(AbortSignal);
+    expect(continuationCalls[0]?.execution?.onEvent).toBeFunction();
+    expect(io.error).toContain('is "completed" and cannot be resumed');
+  });
+
+  test("explicit missing run never invokes mutating Core fallback", async () => {
+    const core = new RecordingCore();
+    core.view = undefined;
+    const io = new TestCliIO();
+
+    expect(await runCli(["resume", runId], { core, io })).toBe(1);
+    expect(core.calls).toEqual([{ method: "inspectRun", input: runId }]);
+    expect(io.error).toContain(`run "${runId}" was not found`);
   });
 
   test("CLI command orchestration no longer imports domain preparation or persistence", async () => {

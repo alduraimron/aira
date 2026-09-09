@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { runCli } from "../../src/cli";
+import { AiraCore } from "../../src/core";
 import {
   createRun,
   loadRun,
@@ -88,6 +89,62 @@ steps:
     ).toBe(0);
     expect(mode).toBe("resume");
     expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(signals.addCalls).toBe(1);
+    expect(signals.removeCalls).toBe(1);
+    expect(signals.handlers.size).toBe(0);
+  });
+
+  test("rejects state changed after inspection before executor mutation", async () => {
+    await writeWorkflowFixture(
+      paths,
+      "feature.yaml",
+      `
+name: feature
+steps:
+  - id: work
+    uses: shell
+    run: work
+`,
+    );
+    const state = await createState({ currentStep: "work" });
+    let executorCalls = 0;
+
+    class MutatingAfterInspectCore extends AiraCore {
+      override async inspectRun(runId?: string) {
+        const view = await super.inspectRun(runId);
+
+        if (view !== undefined) {
+          const current = await loadRun(paths.runsDir, view.runId);
+          await saveRun(
+            paths.runsDir,
+            current,
+            new Date(Date.parse(current.updated_at) + 1_000),
+          );
+        }
+
+        return view;
+      }
+    }
+
+    const core = new MutatingAfterInspectCore({
+      cwd: directory,
+      executor: async (params) => {
+        executorCalls += 1;
+        return params.state;
+      },
+    });
+    const io = new TestCliIO();
+    const signals = new TestSigintSource();
+
+    expect(
+      await runCli(["resume", state.id], {
+        core,
+        io,
+        sigintSource: signals,
+      }),
+    ).toBe(1);
+    expect(executorCalls).toBe(0);
+    expect(io.error).toContain("changed after inspection");
     expect(signals.addCalls).toBe(1);
     expect(signals.removeCalls).toBe(1);
     expect(signals.handlers.size).toBe(0);
@@ -258,7 +315,7 @@ steps:
   });
 
   test.each(["completed", "failed", "cancelled", "running"] as const)(
-    "rejects a %s run without installing a signal handler",
+    "rejects a %s run through the guarded Core call without executing",
     async (status) => {
       const state = await createState({ status });
       const io = new TestCliIO();
@@ -277,7 +334,9 @@ steps:
         }),
       ).toBe(1);
       expect(calls).toBe(0);
-      expect(signals.addCalls).toBe(0);
+      expect(signals.addCalls).toBe(1);
+      expect(signals.removeCalls).toBe(1);
+      expect(signals.handlers.size).toBe(0);
       expect(io.error).toContain(`run "${state.id}" is "${status}"`);
 
       if (status === "running") {
@@ -287,6 +346,24 @@ steps:
       }
     },
   );
+
+  test("reports an explicit missing run without installing a signal handler", async () => {
+    const missingRunId = "20260827-070301-deadbeef";
+    const io = new TestCliIO();
+    const signals = new TestSigintSource();
+
+    expect(
+      await runCli(["resume", missingRunId], {
+        cwd: directory,
+        io,
+        sigintSource: signals,
+      }),
+    ).toBe(1);
+    expect(io.error).toContain(`run "${missingRunId}" was not found`);
+    expect(signals.addCalls).toBe(0);
+    expect(signals.removeCalls).toBe(0);
+    expect(signals.handlers.size).toBe(0);
+  });
 
   test("rejects a workflow identity mismatch", async () => {
     await writeWorkflowFixture(

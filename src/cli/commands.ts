@@ -2,6 +2,7 @@ import { PiRuntime, type AgentRuntime } from "../agent";
 import type { readArtifact } from "../artifacts";
 import {
   AiraCore,
+  CoreRunNotFoundError,
   type CoreWorkflowExecutor,
   type RunBoundary,
 } from "../core";
@@ -154,8 +155,7 @@ async function executeResume(
   const view = await core.inspectRun(runId);
 
   if (view === undefined) {
-    await core.continueRun({ runId, action: "resume" });
-    throw new Error(`run "${runId}" was not found`);
+    throw new CoreRunNotFoundError(runId, "inspectRun");
   }
 
   if (
@@ -168,11 +168,6 @@ async function executeResume(
       dependencies,
       createCliExecutionReporter(dependencies.io),
     );
-  }
-
-  if (!view.allowedActions.includes("resume")) {
-    await core.continueRun({ runId, action: "resume" });
-    throw new Error(`run "${runId}" cannot be resumed`);
   }
 
   const reporter = createCliExecutionReporter(dependencies.io);

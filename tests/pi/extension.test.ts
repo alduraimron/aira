@@ -640,6 +640,10 @@ describe("Aira Pi authorization", () => {
     );
     expect(acceptedCore.initializeCalls).toBe(1);
     expect(resultText(accepted)).toContain("Initialized Aira");
+    expect(acceptedContext.confirmations).toHaveLength(1);
+    expect(acceptedContext.confirmations[0]?.title).toContain("Initialize Aira");
+    expect(acceptedContext.confirmations[0]?.message).toContain(projectRoot);
+    expect(acceptedContext.confirmations[0]?.message).toContain("Create .aira");
 
     const rejectedCore = new FakeCore();
     rejectedCore.project = { initialized: false, root: projectRoot };
@@ -666,21 +670,40 @@ describe("Aira Pi authorization", () => {
     expect(resultText(result)).toContain("no files were changed");
   });
 
-  test("start preflights first, preserves the brief, and creates no run when rejected", async () => {
+  test("start keeps review detail out of its compact rejected authorization", async () => {
     const core = new FakeCore();
     const pi = setup(core);
     const context = createContext({ confirms: [false] });
-    const brief = "Goal\n\nImplement rotation.\n\nNon-goals\n\nNo family ID.";
+    const brief =
+      "Goal\n\nImplement rotation.\n\nDetailed context\n\n" +
+      "LONG-BRIEF-DETAIL ".repeat(300) +
+      "\n\nNon-goals\n\nNo family ID.";
+    const updates: AgentToolResult<any>[] = [];
     const result = await executeTool(
       pi,
       "aira_start",
       { workflow: "feature", task: brief, allowDirty: true },
       context.ctx,
+      { onUpdate: (update) => updates.push(update) },
     );
 
     expect(core.previewCalls).toEqual([{ workflow: "feature", task: brief }]);
     expect(core.startCalls).toHaveLength(0);
-    expect(context.confirmations[0]?.message).toContain(brief);
+    expect(context.confirmations).toHaveLength(1);
+    expect(context.confirmations[0]?.message).not.toContain(brief);
+    expect(context.confirmations[0]?.message).toContain(projectRoot);
+    expect(context.confirmations[0]?.message).toContain("Workflow: feature");
+    expect(context.confirmations[0]?.message).toContain("Steps: 2");
+    expect(context.confirmations[0]?.message).toContain(
+      "Confirming creates and starts a new Aira run",
+    );
+    expect(context.confirmations[0]?.message).toContain(
+      "Brief summary truncated",
+    );
+    expect((context.confirmations[0]?.message ?? "").length).toBeLessThan(1_000);
+    expect(updates.some((update) => resultText(update).includes(brief))).toBe(
+      true,
+    );
     expect((result.details as any).reason).toBe("rejected");
   });
 
@@ -699,7 +722,9 @@ describe("Aira Pi authorization", () => {
     const context = createContext({ confirms: [true] });
     const controller = new AbortController();
     const updates: AgentToolResult<any>[] = [];
-    const brief = "Goal\n\nImplement token rotation.";
+    const brief =
+      "Goal\n\nImplement token rotation.\n\nAcceptance criteria\n\n" +
+      "Preserve the exact agreed behavior. ".repeat(100);
     const result = await executeTool(
       pi,
       "aira_start",
@@ -722,7 +747,11 @@ describe("Aira Pi authorization", () => {
     });
     expect(updates.some((update) => resultText(update).includes("read src/auth.ts")))
       .toBe(true);
+    expect(context.confirmations[0]?.message).not.toContain(brief);
+    expect(context.confirmations[0]?.message).toContain("Workflow: feature");
+    expect(context.confirmations[0]?.message).toContain(projectRoot);
     expect(resultText(result)).toContain("approval-required");
+    expect(resultText(result)).toContain("Use the current session ID.");
     expect(pi.entries).toEqual([
       {
         customType: AIRA_SESSION_ENTRY_TYPE,
@@ -853,19 +882,81 @@ describe("Aira Pi continuation", () => {
       expect(context.confirmations).toHaveLength(1);
       if (action === "approve") {
         expect(context.confirmations[0]?.message).toContain("Approve this plan");
-        expect(context.confirmations[0]?.message).toContain("artifacts/plan-v1.md");
+        expect(context.confirmations[0]?.message).toContain("Artifact: plan");
+        expect(context.confirmations[0]?.message).toContain(
+          "Artifact path: artifacts/plan-v1.md",
+        );
+        expect(context.confirmations[0]?.message).toContain(
+          "Artifact version: 1",
+        );
+        expect(context.confirmations[0]?.message).toContain(
+          "continues Aira execution",
+        );
+        expect(context.confirmations[0]?.message).not.toContain(
+          "Use the current session ID.",
+        );
+        expect((context.confirmations[0]?.message ?? "").length).toBeLessThan(
+          1_000,
+        );
       }
       if (action === "revise") {
-        expect(context.confirmations[0]?.message).toContain(feedback ?? "");
+        expect(context.confirmations[0]?.message).toEndWith(feedback ?? "");
+        expect(context.confirmations[0]?.message).not.toContain(
+          "Revision feedback preview (truncated)",
+        );
       }
       if (action === "resume") {
         expect(context.confirmations[0]?.message).toContain("implement");
+        expect(context.confirmations[0]?.message).toContain(
+          "fresh worker session",
+        );
       }
       if (action === "cancel") {
         expect(context.confirmations[0]?.message).toContain(runId);
+        expect(context.confirmations[0]?.message).toContain(
+          "records Aira's existing cancel decision",
+        );
       }
     },
   );
+
+  test("large revision feedback is previewed but submitted to Core unchanged", async () => {
+    const core = new FakeCore();
+    core.runs.set(runId, approvalRunView());
+    const pi = setup(core);
+    const context = createContext({ confirms: [true] });
+    const feedback =
+      "  BEGIN EXACT FEEDBACK\n" +
+      Array.from(
+        { length: 80 },
+        (_, index) => `Requirement ${index + 1}: preserve behavior exactly.`,
+      ).join("\n") +
+      "\nEND EXACT FEEDBACK  ";
+
+    await executeTool(
+      pi,
+      "aira_continue",
+      { runId, action: "revise", feedback },
+      context.ctx,
+    );
+
+    const message = context.confirmations[0]?.message ?? "";
+    expect(message).not.toContain(feedback);
+    expect(message).toContain("Revision feedback preview (truncated)");
+    expect(message).toContain("Preview truncated:");
+    expect(message).toContain(
+      "Confirming submits the exact unmodified feedback, not only this preview.",
+    );
+    expect(message).toContain("BEGIN EXACT FEEDBACK");
+    expect(message).not.toContain("END EXACT FEEDBACK");
+    expect(message.split("\n").length).toBeLessThanOrEqual(22);
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(4 * 1024);
+    expect(core.continueCalls).toHaveLength(1);
+    expect((core.continueCalls[0]?.input as any).feedback).toBe(feedback);
+    expect((core.continueCalls[0]?.input as any).expectedBoundaryToken).toBe(
+      `checkpoint-${runId}`,
+    );
+  });
 
   test("rejected continuation does not call Core", async () => {
     const core = new FakeCore();
@@ -1068,6 +1159,51 @@ describe("Aira Pi rendering", () => {
       .render(120)
       .join("\n");
     expect(partialText).toContain("Aira · feature");
+
+    const reviewBrief = "FULL EXECUTION BRIEF FOR EXPANDED REVIEW";
+    const collapsedCall = start
+      .renderCall?.(
+        { workflow: "feature", task: reviewBrief, allowDirty: false },
+        theme,
+        renderContext as any,
+      )
+      .render(120)
+      .join("\n");
+    const expandedCall = start
+      .renderCall?.(
+        { workflow: "feature", task: reviewBrief, allowDirty: false },
+        theme,
+        { ...renderContext, expanded: true } as any,
+      )
+      .render(120)
+      .join("\n");
+    expect(collapsedCall).not.toContain(reviewBrief);
+    expect(expandedCall).toContain(reviewBrief);
+
+    const preview = {
+      content: [{ type: "text", text: `Execution brief:\n${reviewBrief}` }],
+      details: { kind: "preview", preview: previewFixture() },
+    } as AgentToolResult<any>;
+    const collapsedPreview = start
+      .renderResult?.(
+        preview,
+        { expanded: false, isPartial: true },
+        theme,
+        renderContext as any,
+      )
+      .render(120)
+      .join("\n");
+    const expandedPreview = start
+      .renderResult?.(
+        preview,
+        { expanded: true, isPartial: true },
+        theme,
+        { ...renderContext, expanded: true, isPartial: true } as any,
+      )
+      .render(120)
+      .join("\n");
+    expect(collapsedPreview).not.toContain(reviewBrief);
+    expect(expandedPreview).toContain(reviewBrief);
 
     const boundary = await executeTool(
       pi,
