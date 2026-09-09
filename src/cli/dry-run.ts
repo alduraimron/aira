@@ -1,63 +1,49 @@
-import type { WorkflowPreflightResult } from "../executor";
-import type { Workflow, WorkflowStep } from "../workflow";
+import type { RunPreview, RunPreviewStep } from "../core";
 import type { CliIO } from "./io";
 
-export function printDryRunPlan(params: {
-  workflow: Workflow;
-  task: string;
-  preflight: WorkflowPreflightResult;
-  io: CliIO;
-}): void {
-  params.io.writeOut(
-    `Workflow: ${params.workflow.name}\n` +
-      `Task: ${params.task}\n\n` +
+export function printDryRunPlan(preview: RunPreview, io: CliIO): void {
+  io.writeOut(
+    `Workflow: ${preview.workflow.name}\n` +
+      `Task: ${preview.task}\n\n` +
       "Steps:\n",
   );
 
-  for (const [index, step] of params.workflow.steps.entries()) {
-    params.io.writeOut(
-      `  ${index + 1}. ${formatStep(step, params.preflight)}\n`,
-    );
+  for (const [index, step] of preview.steps.entries()) {
+    io.writeOut(`  ${index + 1}. ${formatStep(step)}\n`);
 
-    if (step.uses === "loop") {
-      printLoopChildren(step.steps, params.preflight, params.io, "     ");
+    if (step.type === "loop") {
+      printLoopChildren(step.steps ?? [], io, "     ");
     }
   }
 }
 
 function printLoopChildren(
-  steps: readonly WorkflowStep[],
-  preflight: WorkflowPreflightResult,
+  steps: readonly RunPreviewStep[],
   io: CliIO,
   indentation: string,
 ): void {
   for (const step of steps) {
-    io.writeOut(`${indentation}- ${formatStep(step, preflight)}\n`);
+    io.writeOut(`${indentation}- ${formatStep(step)}\n`);
 
-    if (step.uses === "loop") {
-      printLoopChildren(step.steps, preflight, io, `${indentation}  `);
+    if (step.type === "loop") {
+      printLoopChildren(step.steps ?? [], io, `${indentation}  `);
     }
   }
 }
 
-function formatStep(
-  step: WorkflowStep,
-  preflight: WorkflowPreflightResult,
-): string {
-  switch (step.uses) {
+function formatStep(step: RunPreviewStep): string {
+  switch (step.type) {
     case "agent": {
-      const prepared = preflight.agentSteps.get(step.id);
-      const configuration = prepared?.configuration;
       const details = [
-        `command=${step.command}`,
-        ...(configuration?.model === undefined
+        `command=${step.command ?? "unknown"}`,
+        ...(step.agent?.model === undefined
           ? []
-          : [`model=${configuration.model}`]),
-        ...(configuration === undefined
+          : [`model=${step.agent.model}`]),
+        ...(step.agent === undefined
           ? []
           : [
-              `timeout=${configuration.timeoutSeconds}s`,
-              `retry=${configuration.technicalRetries}`,
+              `timeout=${step.agent.timeoutSeconds}s`,
+              `retry=${step.agent.technicalRetries}`,
             ]),
       ];
       return `${step.id}  agent  ${details.join(" ")}`;
@@ -67,9 +53,11 @@ function formatStep(
     case "approval":
       return (
         `${step.id}  approval` +
-        (step.artifact === undefined ? "" : `  artifact=${step.artifact}`)
+        (step.approvalArtifact === undefined
+          ? ""
+          : `  artifact=${step.approvalArtifact}`)
       );
     case "loop":
-      return `${step.id}  loop  max_attempts=${step.max_attempts}`;
+      return `${step.id}  loop  max_attempts=${step.maxAttempts ?? "unknown"}`;
   }
 }

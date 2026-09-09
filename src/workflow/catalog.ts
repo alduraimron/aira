@@ -17,6 +17,16 @@ export class WorkflowCatalogError extends Error {
   }
 }
 
+export class WorkflowNotFoundError extends WorkflowCatalogError {
+  readonly workflow: string;
+
+  constructor(workflow: string) {
+    super(`workflow "${workflow}" not found`);
+    this.name = "WorkflowNotFoundError";
+    this.workflow = workflow;
+  }
+}
+
 /** Loads top-level .yaml and .yml workflow files in deterministic filename order. */
 export async function loadWorkflowCatalog(
   workflowsDir: string,
@@ -90,7 +100,7 @@ export async function loadNamedWorkflow(
       );
     }
 
-    throw new WorkflowCatalogError(`workflow "${name}" not found`);
+    throw new WorkflowNotFoundError(name);
   }
 
   return entry;

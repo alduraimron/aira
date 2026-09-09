@@ -1,6 +1,6 @@
 # Aira
 
-Aira is a CLI-first workflow orchestrator for coding agents. A workflow defines the order of agent work, shell checks, approvals, loops, and artifacts. Pi handles each agent step in a fresh session.
+Aira is an embeddable local workflow runtime for coding agents. A workflow defines the order of agent work, shell checks, approvals, loops, and artifacts. Use it through the traditional `aira` CLI or as an interactive Pi package. Aira runs each agent step in a fresh worker Pi session.
 
 ## Why it exists
 
@@ -14,9 +14,9 @@ Aira follows five rules:
 - Human controls important decisions.
 - Artifacts preserve knowledge.
 
-## V1 scope
+## Current scope
 
-V1 supports project-local YAML workflows, reusable Markdown commands, strict templates and conditions, sequential execution, bounded loops, shell steps, approvals, persisted runs, versioned artifacts, Pi agent sessions, technical retries, interruption, resume, and CLI status output.
+Aira supports project-local YAML workflows, reusable Markdown commands, strict templates and conditions, sequential execution, bounded loops, shell steps, approvals, persisted runs, versioned artifacts, isolated Pi worker sessions, technical retries, interruption, resume, typed Core lifecycle boundaries, CLI status, and a native interactive Pi frontend.
 
 It is intended for local use in one repository. It does not run a server or coordinate parallel workers.
 
@@ -35,7 +35,29 @@ The package exposes the `aira` binary at `src/cli/main.ts`. When the package is 
 
 Actual agent steps require Pi to have a usable configured model. The generated Aira config does not select a model vendor.
 
-## Quick start
+### Install the Pi package locally
+
+The repository is a Pi package containing the Aira extension and skill. Install the current checkout by path:
+
+```bash
+pi install "$(pwd)"
+```
+
+To keep the package setting inside another project, run this from that project and point at the Aira checkout:
+
+```bash
+pi install -l /absolute/path/to/aira
+```
+
+For a one-off development load without changing settings:
+
+```bash
+pi -e /absolute/path/to/aira
+```
+
+Pi installs package runtime dependencies. Pi-owned modules and TypeBox are peer dependencies so the host and extension use the same module instances. Local and Git installation are supported. The package remains private and is not published to npm.
+
+## Traditional CLI quick start
 
 Run these commands at the repository root:
 
@@ -53,6 +75,78 @@ Use `--allow-dirty` when you intentionally want to start a run in a dirty Git wo
 ```bash
 aira run bugfix "Fix expired sessions being accepted" --allow-dirty
 ```
+
+## Interactive Pi usage
+
+Start Pi in the repository after installing the package:
+
+```text
+$ pi
+
+You:
+Let's inspect the current auth implementation. I want token rotation,
+but I'm not sure which design fits this codebase.
+
+Pi:
+[inspects and discusses the code without starting Aira]
+
+You:
+Okay. Use the existing session ID, don't introduce another family ID.
+Implement it with Aira.
+
+Pi:
+[uses aira_project to inspect real workflow names and descriptions]
+[compresses the agreement into an execution brief]
+[calls aira_start]
+[Aira's extension shows the proposed workflow and asks for authorization]
+[Aira runs discovery and planning]
+[control returns at plan approval]
+
+Pi:
+Here is Aira's plan...
+```
+
+The host Pi should continue discussion while requirements or design choices remain open. Once the change is agreed, the bundled Aira skill tells Pi to prepare a self-contained brief with the goal, context, chosen approach, constraints, acceptance criteria, and non-goals. The extension sends that brief as `input.task`. It does not forward the conversation transcript.
+
+The native tools are:
+
+- `aira_project` inspects initialization, workflows, and the active or latest run.
+- `aira_init` initializes `.aira` after authorization.
+- `aira_start` preflights, asks for authorization, starts through Core, and streams progress.
+- `aira_status` returns structured status and allowed next actions.
+- `aira_continue` submits approve, revise, cancel, or resume after authorization.
+- `aira_artifact` reads a bounded current or historical artifact through Core.
+
+The read-only tools never prompt. Every mutating tool requires a Pi-trusted project and an interactive human confirmation inside the extension. If project trust or a dialog-capable UI is unavailable, mutation fails closed. Preview and boundary tokens also make Core refuse an action when relevant files or run state changed while the human was deciding. The model cannot bypass these checks, and Aira never auto-approves an approval step.
+
+At an approval boundary, discuss the artifact with the human. Use `aira_continue` only after the human chooses:
+
+```text
+approve -> persist approval and continue
+revise  -> persist the exact feedback, rerun the configured revision target,
+           write the next artifact version, and return to approval
+cancel  -> persist cancellation without continuing
+```
+
+If a run is interrupted, `aira_status` reports whether resume is valid. `aira_continue` with `resume` uses Aira's existing durable resume rules. A loop that exhausts its attempts returns a manual-intervention boundary, not a fake approval.
+
+The `/aira` command gives a compact read-only project and run summary for humans.
+
+### Runtime separation
+
+```text
+Host Pi  = long-lived discussion and supervision
+Aira     = deterministic workflow control and persisted state
+Worker Pi = fresh bounded reasoning and execution for one agent attempt
+```
+
+Worker Pi sessions do not inherit the host conversation, Aira extension, skills, prompt templates, context files, retries, or interactive session state. Aira config and workflow model choices remain authoritative in both CLI and Pi usage.
+
+## Embedding Aira Core
+
+Import `AiraCore` from `aira/core` when building another local frontend. Core exposes project inspection and initialization, workflow listing and preview, start and continuation operations, run inspection, artifact access, typed lifecycle boundaries, and typed errors. Long-running calls accept the existing Aira event listener and an `AbortSignal`.
+
+See [`docs/core-api.md`](docs/core-api.md) for the DTOs, action rules, error model, and dependency-injection seams. `RunState` remains internal persisted state and is not the public integration contract.
 
 ## Project layout
 
@@ -295,7 +389,7 @@ Aira keeps completed steps, resets the interrupted execution point, and starts a
 
 Interrupted and supported waiting runs can resume. Aira also resumes a running revision checkpoint when `run.json` has a pending revision and its target is pending or running. This covers a process exit after feedback was saved and a crash while the revision target was active. Other runs left `running` still require manual recovery. A loop that exhausts all attempts also waits, but manual loop intervention is not supported.
 
-## V1 limitations
+## Current limitations
 
 - Execution is sequential. There is no DAG or parallel execution.
 - Default feature and bugfix workflows do not run deterministic verification until the project configures it.

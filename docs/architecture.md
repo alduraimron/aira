@@ -1,6 +1,6 @@
-# Aira V1 architecture
+# Aira architecture
 
-This document records the V1 boundaries. New work should fit these boundaries unless a later phase changes them deliberately.
+This document records Aira's runtime boundaries. New work should fit these boundaries unless a later version changes them deliberately.
 
 ## Core principle
 
@@ -14,8 +14,22 @@ Artifacts preserve knowledge
 
 Aira coordinates these parts. It does not move agent judgment into the workflow engine or hide deterministic policy inside prompts.
 
+## Frontends and Core
+
+```text
+Traditional CLI ─┐
+                 ├─> Aira Core -> executor -> shell or fresh worker Pi
+Interactive Pi ──┘
+```
+
+The CLI and Pi extension are adapters over `core`. Core owns project discovery, workflow preparation, Git admission, run creation, continuation eligibility, approval decisions, executor calls, and lifecycle-boundary classification. Frontends own argument or tool schemas, human IO, formatting, authorization UI, signals, and exit codes.
+
+`RunState` remains the internal persisted representation. Core reloads it by run ID and returns typed DTOs. Frontends do not patch or persist `RunState`.
+
 ## Main modules
 
+- `core` exposes application operations, stable run views and lifecycle boundaries, and typed application errors.
+- `pi` registers the native Pi tools, session association, authorization dialogs, progress rendering, and `/aira` command.
 - `workflow` loads YAML, validates the public schema, checks IDs, artifacts, loops, and approval references, and builds the workflow catalog.
 - `config` loads project-local aliases and execution defaults from `.aira/config.yaml`.
 - `commands` parses reusable Markdown prompts and their supported YAML frontmatter.
@@ -26,10 +40,27 @@ Aira coordinates these parts. It does not move agent judgment into the workflow 
 - `executor` runs validated steps sequentially and persists state at execution boundaries.
 - `approval` applies explicit approve, revise, or cancel decisions to a waiting run.
 - `agent` defines the provider-neutral runtime contract. `agent/pi` implements it with Pi.
-- `cli` parses commands, checks Git state, drives approvals and resume, and formats lifecycle output.
+- `cli` parses commands, adapts SIGINT and approval prompts, formats Core results, and maps exit codes.
 - `project` discovers `.aira/` and creates the non-destructive V1 default project.
 
 Defaults are ordinary config, workflow, and command files. The runtime gives them no privileged behavior.
+
+## Core lifecycle boundaries
+
+Long-running Core calls accept an `AbortSignal` and the existing Aira execution-event listener. Core passes both to the executor.
+
+Core returns one of these boundaries after execution:
+
+- `completed`
+- `approval-required`
+- `interrupted`
+- `failed`
+- `cancelled`
+- `manual-intervention`
+
+Approval boundaries contain the approval step, message, allowed decisions, referenced artifact metadata, and current artifact content when available. Loop exhaustion maps to `manual-intervention` with unsupported recovery. It never masquerades as an approval.
+
+Core separates normal workflow boundaries from invalid API use and configuration or infrastructure errors. Public consumers use error classes and codes rather than parsing CLI output.
 
 ## Agent session model
 
@@ -98,11 +129,11 @@ If the condition is still false after the last attempt, the run waits with the f
 
 Execution resume applies only to a persisted interrupted run. Completed and skipped steps remain complete. Aira resets the interrupted execution point and reruns it. An agent rerun always uses a fresh Pi session.
 
-The CLI also accepts a supported waiting approval and reopens the decision before continuing. It does not recover a run left as `running` by an uncontrolled process crash. Completed, failed, and cancelled runs cannot resume.
+Core exposes waiting approvals as explicit approve, revise, and cancel actions. The CLI can reopen its prompt, while the Pi frontend discusses the artifact before submitting the human's authorized decision. Core does not recover a run left as `running` by an uncontrolled process crash unless it is the existing durable pending-revision checkpoint. Completed, failed, and cancelled runs cannot resume.
 
-## V1 non-goals
+## Current non-goals
 
-V1 does not include:
+Aira does not include:
 
 - DAG or parallel execution
 - nested loops

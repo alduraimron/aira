@@ -46,6 +46,7 @@ export async function runCli(
     return await executeCliCommand(parsed, {
       io,
       cwd: options.cwd ?? process.cwd(),
+      core: options.core,
       agentRuntimeFactory: options.agentRuntimeFactory,
       executor: options.executor,
       approvalDecisionApplier: options.approvalDecisionApplier,

@@ -34,3 +34,21 @@ export class ArtifactError extends Error {
     this.filePath = options.filePath;
   }
 }
+
+export class ArtifactNotFoundError extends ArtifactError {
+  constructor(runId: string, artifactName: string) {
+    super("Artifact is not present in run state", { runId, artifactName });
+    this.name = "ArtifactNotFoundError";
+  }
+}
+
+export class ArtifactVersionNotFoundError extends ArtifactError {
+  constructor(runId: string, artifactName: string, filePath: string) {
+    super("Artifact version is not present in run state", {
+      runId,
+      artifactName,
+      filePath,
+    });
+    this.name = "ArtifactVersionNotFoundError";
+  }
+}

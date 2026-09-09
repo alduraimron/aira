@@ -1,21 +1,22 @@
-import type { RunState, StepStatus } from "../run";
+import type { RunView } from "../core";
+import type { StepStatus } from "../run";
 
-export function formatRunStatus(state: RunState): string {
+export function formatRunStatus(view: RunView): string {
   const lines = [
-    `Run:       ${state.id}`,
-    `Workflow:  ${state.workflow}`,
-    `Status:    ${state.status}`,
-    `Current:   ${state.current_step ?? "-"}`,
-    `Started:   ${state.started_at}`,
-    `Updated:   ${state.updated_at}`,
+    `Run:       ${view.runId}`,
+    `Workflow:  ${view.workflow}`,
+    `Status:    ${view.status}`,
+    `Current:   ${view.currentStep?.id ?? "-"}`,
+    `Started:   ${view.startedAt}`,
+    `Updated:   ${view.updatedAt}`,
     "",
     "Steps:",
   ];
-  const width = Math.max(0, ...Object.keys(state.steps).map((id) => id.length));
+  const width = Math.max(0, ...view.steps.map((step) => step.id.length));
 
-  for (const [stepId, step] of Object.entries(state.steps)) {
+  for (const step of view.steps) {
     lines.push(
-      `  ${statusSymbol(step.status)} ${stepId.padEnd(width)}  ` +
+      `  ${statusSymbol(step.status)} ${step.id.padEnd(width)}  ` +
         `${step.status.padEnd(11)} attempt ${step.attempt}`,
     );
   }
@@ -32,7 +33,6 @@ function statusSymbol(status: StepStatus): string {
     case "waiting":
       return "[>]";
     case "failed":
-      return "[!]";
     case "interrupted":
       return "[!]";
     case "skipped":

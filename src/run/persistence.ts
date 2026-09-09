@@ -8,7 +8,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-import { RunStateError } from "./errors";
+import { RunNotFoundError, RunStateError } from "./errors";
 import { generateRunId } from "./id";
 import { getRunPaths, type RunPaths } from "./paths";
 import { runStateSchema } from "./schema";
@@ -72,6 +72,10 @@ export async function loadRun(
   try {
     source = await readFile(paths.stateFile, "utf8");
   } catch (error) {
+    if (isMissingPathError(error)) {
+      throw new RunNotFoundError(runId, paths.stateFile, { cause: error });
+    }
+
     throw new RunStateError("Could not read run state", {
       runId,
       filePath: paths.stateFile,
@@ -197,6 +201,15 @@ function getDocumentRunId(document: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 function formatIssuePath(parts: readonly PropertyKey[]): string {

@@ -27,3 +27,14 @@ export class RunStateError extends Error {
     this.filePath = options.filePath;
   }
 }
+
+export class RunNotFoundError extends RunStateError {
+  constructor(runId: string, filePath: string, options?: ErrorOptions) {
+    super("Could not read run state: run was not found", {
+      runId,
+      filePath,
+      cause: options?.cause,
+    });
+    this.name = "RunNotFoundError";
+  }
+}

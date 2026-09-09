@@ -1,18 +1,5 @@
-import type { AgentRuntime } from "../agent";
-import type { readArtifact } from "../artifacts";
-import type { AiraConfig } from "../config";
-import {
-  executeWorkflow,
-  type ExecuteWorkflowParams,
-  type ExecutionMode,
-} from "../executor";
-import type { AiraProjectPaths } from "../project";
-import type { RunState } from "../run";
-import { findWorkflowStep, type Workflow } from "../workflow";
-import {
-  interactWithApproval,
-  type ApprovalDecisionApplier,
-} from "./approval";
+import type { AiraCore, RunBoundary } from "../core";
+import { interactWithApproval } from "./approval";
 import {
   CLI_EXIT_CANCELLED,
   CLI_EXIT_FAILURE,
@@ -31,152 +18,105 @@ import {
   withSigintAbort,
 } from "./signals";
 
-export type WorkflowExecutor = (
-  params: ExecuteWorkflowParams,
-) => Promise<RunState>;
-
 export interface RunLifecycleParams {
-  workflow: Workflow;
-  config: AiraConfig;
-  paths: AiraProjectPaths;
-  state: RunState;
-  cwd: string;
+  core: AiraCore;
+  boundary: RunBoundary;
   io: CliIO;
   sigintSource?: SigintSource;
-  initialMode: Extract<ExecutionMode, "fresh" | "resume">;
-  executeFirst: boolean;
-  agentRuntime?: AgentRuntime;
-  executor?: WorkflowExecutor;
-  approvalDecisionApplier?: ApprovalDecisionApplier;
-  approvalArtifactReader?: typeof readArtifact;
   reporter?: ExecutionReporter;
 }
 
 export async function runLifecycle(
   params: RunLifecycleParams,
 ): Promise<CliExitCode> {
-  let state = params.state;
-  let shouldExecute = params.executeFirst;
-  let mode: ExecutionMode = params.initialMode;
-  const executor = params.executor ?? executeWorkflow;
+  let boundary = params.boundary;
   const reporter = params.reporter ?? createCliExecutionReporter(params.io);
 
   while (true) {
-    if (shouldExecute) {
-      state = await withSigintAbort({
-        io: params.io,
-        source: params.sigintSource ?? processSigintSource,
-        execute: async (signal) =>
-          await executor({
-            workflow: params.workflow,
-            runsRoot: params.paths.runsDir,
-            state,
-            context: { config: params.config },
-            cwd: params.cwd,
-            commandsDir: params.paths.commandsDir,
-            shellTimeout: params.config.defaults?.shell_timeout,
-            agentRuntime: params.agentRuntime,
-            signal,
-            mode,
-            onEvent: (event) => reporter.emit(event),
-          }),
-      });
-    }
-
-    shouldExecute = false;
-
-    switch (state.status) {
+    switch (boundary.kind) {
       case "completed":
-        params.io.writeOut(`✓ Run completed: ${state.id}\n`);
+        params.io.writeOut(`✓ Run completed: ${boundary.runId}\n`);
         return CLI_EXIT_SUCCESS;
       case "failed":
-        params.io.writeError(`✗ Run failed: ${state.id}\n`);
+        params.io.writeError(`✗ Run failed: ${boundary.runId}\n`);
         return CLI_EXIT_FAILURE;
       case "cancelled":
         params.io.writeOut("Run cancelled.\n");
         return CLI_EXIT_CANCELLED;
       case "interrupted":
-        params.io.writeError(`Run interrupted: ${state.id}\n`);
+        params.io.writeError(`Run interrupted: ${boundary.runId}\n`);
         return CLI_EXIT_INTERRUPTED;
-      case "running":
-        throw new Error(
-          `executor returned run "${state.id}" with non-terminal status "running"`,
+      case "manual-intervention": {
+        const stepId = boundary.currentStep?.id ?? "unknown";
+        const attempts = boundary.intervention.maxAttempts;
+        params.io.writeError(
+          boundary.reason === "loop-exhausted" && attempts !== undefined
+            ? `Run is waiting after loop "${stepId}" exhausted its ` +
+                `${attempts} attempts.\n` +
+                "Manual loop intervention is not supported yet.\n" +
+                `Run ID: ${boundary.runId}\n`
+            : `${boundary.summary}\nRun ID: ${boundary.runId}\n`,
         );
-      case "waiting": {
-        const stepId = state.current_step;
-
-        if (stepId === undefined) {
-          throw new Error(`waiting run "${state.id}" has no current step`);
-        }
-
-        const step = findWorkflowStep(params.workflow, stepId);
-
-        if (step === undefined) {
-          throw new Error(
-            `waiting run "${state.id}" references unknown step "${stepId}"`,
-          );
-        }
-
-        if (step.uses === "loop") {
-          params.io.writeError(
-            `Run is waiting after loop "${step.id}" exhausted its ` +
-              `${step.max_attempts} attempts.\n` +
-              "Manual loop intervention is not supported yet.\n" +
-              `Run ID: ${state.id}\n`,
-          );
-          return CLI_EXIT_FAILURE;
-        }
-
-        if (step.uses !== "approval") {
-          throw new Error(
-            `run "${state.id}" is waiting at unsupported step "${step.id}"`,
-          );
-        }
-
+        return CLI_EXIT_FAILURE;
+      }
+      case "approval-required": {
         reporter.emit({
           type: "step.started",
-          stepId: step.id,
+          stepId: boundary.approval.stepId,
           stepType: "approval",
         });
         reporter.emit({
           type: "approval.waiting",
-          stepId: step.id,
-          ...(step.message === undefined ? {} : { message: step.message }),
+          stepId: boundary.approval.stepId,
+          message: boundary.approval.message,
         });
 
         const interaction = await interactWithApproval({
-          workflow: params.workflow,
-          runsRoot: params.paths.runsDir,
-          state,
+          boundary,
           io: params.io,
           sigintSource: params.sigintSource,
-          applyDecision: params.approvalDecisionApplier,
-          artifactReader: params.approvalArtifactReader,
           showWaitingHeader: false,
         });
 
         if (interaction.kind === "interrupted") {
-          params.io.writeError(
-            "approval interrupted; run remains waiting\n",
-          );
+          params.io.writeError("approval interrupted; run remains waiting\n");
           return CLI_EXIT_INTERRUPTED;
         }
 
         if (interaction.kind === "closed") {
-          params.io.writeError(
-            "approval input closed; run remains waiting\n",
-          );
+          params.io.writeError("approval input closed; run remains waiting\n");
           return CLI_EXIT_FAILURE;
         }
 
-        if (interaction.kind === "cancelled") {
-          params.io.writeOut("Run cancelled.\n");
-          return CLI_EXIT_CANCELLED;
+        if (interaction.decision === "cancel") {
+          boundary = await params.core.continueRun({
+            runId: boundary.runId,
+            action: "cancel",
+            expectedBoundaryToken: boundary.checkpointToken,
+          });
+          break;
         }
 
-        state = interaction.state;
-        mode = "continue";
-        shouldExecute = true;
+        boundary = await withSigintAbort({
+          io: params.io,
+          source: params.sigintSource ?? processSigintSource,
+          execute: async (signal) =>
+            await params.core.continueRun(
+              interaction.decision === "revise"
+                ? {
+                    runId: boundary.runId,
+                    action: "revise",
+                    feedback: interaction.feedback ?? "",
+                    expectedBoundaryToken: boundary.checkpointToken,
+                  }
+                : {
+                    runId: boundary.runId,
+                    action: "approve",
+                    expectedBoundaryToken: boundary.checkpointToken,
+                  },
+              { signal, onEvent: reporter.emit },
+            ),
+        });
         break;
       }
     }

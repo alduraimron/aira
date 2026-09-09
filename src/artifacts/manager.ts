@@ -5,7 +5,11 @@ import { getRunPaths } from "../run/paths";
 import { saveRun } from "../run/persistence";
 import { artifactStateSchema } from "../run/schema";
 import type { ArtifactState, RunState } from "../run/types";
-import { ArtifactError } from "./errors";
+import {
+  ArtifactError,
+  ArtifactNotFoundError,
+  ArtifactVersionNotFoundError,
+} from "./errors";
 import {
   assertArtifactName,
   getVersionedArtifactFilename,
@@ -132,20 +136,13 @@ export async function readArtifactVersion(
   const artifact = getExistingArtifactState(state, name);
 
   if (artifact === undefined) {
-    throw new ArtifactError("Artifact is not present in run state", {
-      runId: state.id,
-      artifactName: name,
-    });
+    throw new ArtifactNotFoundError(state.id, name);
   }
 
   const knownPaths = artifact.versions ?? [artifact.current];
 
   if (!knownPaths.includes(storedPath)) {
-    throw new ArtifactError("Artifact version is not present in run state", {
-      runId: state.id,
-      artifactName: name,
-      filePath: storedPath,
-    });
+    throw new ArtifactVersionNotFoundError(state.id, name, storedPath);
   }
 
   const absolutePath = resolveStoredArtifactAbsolutePath(
@@ -164,10 +161,7 @@ export function getArtifactAbsolutePath(
   const artifact = getExistingArtifactState(state, name);
 
   if (artifact === undefined) {
-    throw new ArtifactError("Artifact is not present in run state", {
-      runId: state.id,
-      artifactName: name,
-    });
+    throw new ArtifactNotFoundError(state.id, name);
   }
 
   const paths = getRunPaths(runsRoot, state.id);

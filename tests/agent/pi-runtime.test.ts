@@ -326,7 +326,7 @@ describe("PiRuntime session boundary", () => {
     const piDirectory = path.join(directory, ".pi");
     await mkdir(path.join(piDirectory, "extensions"), { recursive: true });
     await mkdir(path.join(piDirectory, "prompts"), { recursive: true });
-    await mkdir(path.join(piDirectory, "skills", "local"), {
+    await mkdir(path.join(piDirectory, "skills", "aira"), {
       recursive: true,
     });
     await writeFile(
@@ -345,8 +345,8 @@ describe("PiRuntime session boundary", () => {
       "utf8",
     );
     await writeFile(
-      path.join(piDirectory, "extensions", "must-not-load.ts"),
-      'throw new Error("project extension loaded");\n',
+      path.join(piDirectory, "extensions", "host-aira.ts"),
+      'throw new Error("HOST_AIRA_EXTENSION_MARKER loaded");\n',
       "utf8",
     );
     await writeFile(
@@ -355,8 +355,8 @@ describe("PiRuntime session boundary", () => {
       "utf8",
     );
     await writeFile(
-      path.join(piDirectory, "skills", "local", "SKILL.md"),
-      "---\nname: local\ndescription: local\n---\nproject skill\n",
+      path.join(piDirectory, "skills", "aira", "SKILL.md"),
+      "---\nname: aira\ndescription: host Aira skill\n---\nHOST_AIRA_SKILL_MARKER\n",
       "utf8",
     );
 
@@ -395,6 +395,7 @@ describe("PiRuntime session boundary", () => {
       expect(first.settingsManager.getProviderRetrySettings().maxRetries).toBe(0);
       expect(first.autoCompactionEnabled).toBe(false);
       expect(first.getActiveToolNames()).toEqual([]);
+      expect(first.getActiveToolNames()).not.toContain("aira_start");
       expect(second.getActiveToolNames()).toEqual([
         "read",
         "grep",
@@ -414,6 +415,8 @@ describe("PiRuntime session boundary", () => {
       expect(first.systemPrompt).not.toContain("AIRA_CONTEXT_MARKER");
       expect(first.systemPrompt).not.toContain("AIRA_SYSTEM_MARKER");
       expect(first.systemPrompt).not.toContain("AIRA_APPEND_SYSTEM_MARKER");
+      expect(first.systemPrompt).not.toContain("HOST_AIRA_SKILL_MARKER");
+      expect(first.systemPrompt).not.toContain("HOST_AIRA_EXTENSION_MARKER");
     } finally {
       first.dispose();
       second.dispose();
