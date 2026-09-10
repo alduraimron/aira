@@ -1,6 +1,6 @@
 # Aira architecture
 
-This document records Aira's runtime boundaries. New work should fit these boundaries unless a later version changes them deliberately.
+This document records the current v1 runtime boundaries. The [Aira SDD v2 architecture](sdd-v2/architecture.md), ADRs, and stable invariants define the normative target for future v2 work; they do not change the production behavior described here.
 
 ## Core principle
 
@@ -64,7 +64,7 @@ Core separates normal workflow boundaries from invalid API use and configuration
 
 ## Agent session model
 
-Every agent attempt gets one fresh Pi session. Retries, plan revisions, and interrupted-step reruns create another fresh session. The Aira executor passes the resolved prompt, model selection if present, tool allowlist, timeout, abort signal, audit-log path, and completion contract through `AgentRuntime`.
+Every agent attempt gets one fresh disposable Pi in-memory session, not necessarily a fresh OS process. Retries, plan revisions, and interrupted-step reruns create another fresh session. The Aira executor passes the resolved prompt, model selection if present, tool allowlist, timeout, abort signal, audit-log path, and completion contract through `AgentRuntime`.
 
 Aira requires a valid `complete_step` call for semantic completion. Final assistant text alone cannot complete an agent step.
 

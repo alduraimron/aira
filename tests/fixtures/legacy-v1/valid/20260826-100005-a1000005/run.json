@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "20260826-100005-a1000005",
+  "workflow": "legacy-review",
+  "status": "waiting",
+  "input": {
+    "task": "Review one versioned plan"
+  },
+  "current_step": "approve-plan",
+  "started_at": "2026-08-26T10:00:05.000Z",
+  "updated_at": "2026-08-26T10:02:05.000Z",
+  "steps": {
+    "plan": {
+      "status": "completed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:00:06.000Z",
+      "completed_at": "2026-08-26T10:01:05.000Z",
+      "success": true,
+      "summary": "Proposed the initial plan.",
+      "artifact": "artifacts/plan-v1.md",
+      "output": "The plan is ready for review."
+    },
+    "approve-plan": {
+      "status": "waiting",
+      "attempt": 0
+    },
+    "verify": {
+      "status": "pending",
+      "attempt": 0
+    }
+  },
+  "artifacts": {
+    "plan": {
+      "current": "artifacts/plan-v1.md",
+      "versions": ["artifacts/plan-v1.md"]
+    }
+  }
+}

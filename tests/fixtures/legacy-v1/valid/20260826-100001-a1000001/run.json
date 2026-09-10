@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "id": "20260826-100001-a1000001",
+  "workflow": "legacy-shell",
+  "status": "completed",
+  "input": {
+    "task": "Check the historical shell output format",
+    "optional": false,
+    "options": {
+      "strict": true,
+      "targets": ["types", "tests"],
+      "note": null
+    }
+  },
+  "started_at": "2026-08-26T10:00:01.000Z",
+  "updated_at": "2026-08-26T10:01:01.000Z",
+  "steps": {
+    "verify": {
+      "status": "completed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:00:02.000Z",
+      "completed_at": "2026-08-26T10:01:00.000Z",
+      "success": true,
+      "exit_code": 0,
+      "output": "== types ==\nexit_code: 0\n\nSTDOUT:\nTypes valid\n\n\nSTDERR:\n\n\n== tests ==\nexit_code: 0\n\nSTDOUT:\n2 tests passed\n\n\nSTDERR:\n"
+    },
+    "optional-check": {
+      "status": "skipped",
+      "attempt": 0
+    }
+  },
+  "artifacts": {}
+}

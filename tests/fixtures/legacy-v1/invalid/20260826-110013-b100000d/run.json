@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "20260826-110013-b100000d",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:13.000Z",
+  "updated_at": "2026-08-26T11:00:13.000Z",
+  "steps": {},
+  "artifacts": {},
+  "revisions": [
+    {
+      "approval_step": "approve-plan",
+      "target_step": "plan",
+      "feedback": "Add rollback checks.",
+      "requested_at": "2026-08-26T11:00:13.000Z",
+      "status": "pending",
+      "resolved_at": "2026-08-26T11:00:13.000Z"
+    }
+  ]
+}

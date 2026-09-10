@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "id": "20260826-100009-a1000009",
+  "workflow": "legacy-loop",
+  "status": "waiting",
+  "input": {
+    "task": "Preserve an exhausted repair loop"
+  },
+  "current_step": "repair-loop",
+  "started_at": "2026-08-26T10:00:09.000Z",
+  "updated_at": "2026-08-26T10:04:09.000Z",
+  "steps": {
+    "repair-loop": {
+      "status": "waiting",
+      "attempt": 2,
+      "started_at": "2026-08-26T10:00:10.000Z",
+      "success": false
+    },
+    "check": {
+      "status": "failed",
+      "attempt": 2,
+      "started_at": "2026-08-26T10:02:10.000Z",
+      "completed_at": "2026-08-26T10:03:09.000Z",
+      "success": false,
+      "exit_code": 1,
+      "output": "STDOUT:\n\n\nSTDERR:\nFAIL: rollback record still absent\n"
+    },
+    "repair": {
+      "status": "completed",
+      "attempt": 2,
+      "started_at": "2026-08-26T10:03:10.000Z",
+      "completed_at": "2026-08-26T10:04:08.000Z",
+      "success": true,
+      "summary": "Adjusted the rollback path; another check is needed.",
+      "output": "Repair attempted."
+    }
+  },
+  "artifacts": {}
+}

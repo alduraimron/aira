@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "id": "20260826-110011-b100000b",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:11.000Z",
+  "updated_at": "2026-08-26T11:00:11.000Z",
+  "steps": {},
+  "artifacts": {
+    "plan": { "current": "artifacts/plan-v1.md", "versions": [] }
+  }
+}

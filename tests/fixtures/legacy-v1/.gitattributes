@@ -1,0 +1,2 @@
+# Preserve literal fixture bytes, including manifest and metadata, on checkout.
+* -text

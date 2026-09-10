@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "id": "20260826-100004-a1000004",
+  "workflow": "legacy-note",
+  "status": "interrupted",
+  "input": {
+    "task": "Write a compatibility note"
+  },
+  "current_step": "note",
+  "started_at": "2026-08-26T10:00:04.000Z",
+  "updated_at": "2026-08-26T10:01:04.000Z",
+  "steps": {
+    "note": {
+      "status": "interrupted",
+      "attempt": 2,
+      "started_at": "2026-08-26T10:00:34.000Z",
+      "success": false,
+      "output": "INTERRUPTED:\nexecution aborted by external signal"
+    }
+  },
+  "artifacts": {}
+}

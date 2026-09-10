@@ -1,0 +1,21 @@
+# Synthetic fixture context, not a recovered historical workflow snapshot.
+name: legacy-review
+inputs:
+  task:
+    required: true
+steps:
+  - id: plan
+    uses: agent
+    command: plan
+    artifact:
+      name: plan
+      filename: plan.md
+      versioned: true
+  - id: approve-plan
+    uses: approval
+    artifact: plan
+    message: Review the proposed plan.
+    revise: plan
+  - id: verify
+    uses: shell
+    run: "printf 'Plan checks passed\n'"

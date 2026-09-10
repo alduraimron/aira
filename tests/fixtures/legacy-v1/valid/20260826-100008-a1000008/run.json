@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "id": "20260826-100008-a1000008",
+  "workflow": "legacy-note",
+  "status": "completed",
+  "input": {
+    "task": "Write café compatibility notes"
+  },
+  "started_at": "2026-08-26T10:00:08.000Z",
+  "updated_at": "2026-08-26T10:01:08.000Z",
+  "steps": {
+    "note": {
+      "status": "completed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:00:09.000Z",
+      "completed_at": "2026-08-26T10:01:07.000Z",
+      "success": true,
+      "summary": "Recorded café compatibility notes.",
+      "artifact": "artifacts/reports/note.md",
+      "output": "Saved café notes."
+    }
+  },
+  "artifacts": {
+    "notes": {
+      "current": "artifacts/reports/note.md"
+    }
+  }
+}

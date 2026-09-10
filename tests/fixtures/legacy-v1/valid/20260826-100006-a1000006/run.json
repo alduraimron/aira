@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "id": "20260826-100006-a1000006",
+  "workflow": "legacy-review",
+  "status": "completed",
+  "input": {
+    "task": "Revise a plan using explicit feedback"
+  },
+  "started_at": "2026-08-26T10:00:06.000Z",
+  "updated_at": "2026-08-26T10:06:06.000Z",
+  "steps": {
+    "plan": {
+      "status": "completed",
+      "attempt": 2,
+      "started_at": "2026-08-26T10:03:07.000Z",
+      "completed_at": "2026-08-26T10:04:06.000Z",
+      "success": true,
+      "summary": "Added rollback and validator checks.",
+      "artifact": "artifacts/plan-v2.md",
+      "output": "The revised plan preserves PDF export."
+    },
+    "approve-plan": {
+      "status": "completed",
+      "attempt": 0,
+      "completed_at": "2026-08-26T10:05:06.000Z",
+      "success": true,
+      "result": "approved"
+    },
+    "verify": {
+      "status": "completed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:05:07.000Z",
+      "completed_at": "2026-08-26T10:06:05.000Z",
+      "success": true,
+      "exit_code": 0,
+      "output": "STDOUT:\nPlan checks passed\n\n\nSTDERR:\n"
+    }
+  },
+  "artifacts": {
+    "plan": {
+      "current": "artifacts/plan-v2.md",
+      "versions": ["artifacts/plan-v1.md", "artifacts/plan-v2.md"]
+    }
+  },
+  "revisions": [
+    {
+      "approval_step": "approve-plan",
+      "target_step": "plan",
+      "feedback": "Do not change PDF export. Add rollback and validator checks.",
+      "requested_at": "2026-08-26T10:03:06.000Z",
+      "status": "resolved",
+      "previous_artifact": {
+        "name": "plan",
+        "path": "artifacts/plan-v1.md"
+      },
+      "resolved_at": "2026-08-26T10:04:06.000Z"
+    }
+  ]
+}

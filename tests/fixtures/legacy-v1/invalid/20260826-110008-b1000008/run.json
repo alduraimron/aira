@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "id": "20260826-110008-b1000008",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:08.000Z",
+  "updated_at": "2026-08-26T11:00:08.000Z",
+  "steps": {},
+  "artifacts": {
+    "plan": { "current": "artifacts/../outside.md" }
+  }
+}

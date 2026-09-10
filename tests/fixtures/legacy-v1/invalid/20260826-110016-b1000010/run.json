@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "20260826-110016-b1000010",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:16.000Z",
+  "updated_at": "2026-08-26T11:00:16.000Z",
+  "steps": {},
+  "artifacts": {},
+  "revisions": [
+    {
+      "approval_step": "approve-plan",
+      "target_step": "plan",
+      "feedback": " \n\t ",
+      "requested_at": "2026-08-26T11:00:16.000Z",
+      "status": "pending"
+    }
+  ]
+}

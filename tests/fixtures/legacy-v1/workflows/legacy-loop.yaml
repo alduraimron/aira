@@ -1,0 +1,18 @@
+# Synthetic fixture context, not a recovered historical workflow snapshot.
+name: legacy-loop
+inputs:
+  task:
+    required: true
+steps:
+  - id: repair-loop
+    uses: loop
+    max_attempts: 2
+    until: steps.check.success == true
+    steps:
+      - id: check
+        uses: shell
+        run: "printf 'FAIL: rollback record still absent\n' >&2; exit 1"
+      - id: repair
+        uses: agent
+        command: repair
+        when: steps.check.success == false

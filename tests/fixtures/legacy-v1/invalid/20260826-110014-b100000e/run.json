@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "20260826-110014-b100000e",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:14.000Z",
+  "updated_at": "2026-08-26T11:00:15.000Z",
+  "steps": {},
+  "artifacts": {},
+  "revisions": [
+    {
+      "approval_step": "approve-plan",
+      "target_step": "plan",
+      "feedback": "Add rollback checks.",
+      "requested_at": "2026-08-26T11:00:14.000Z",
+      "status": "pending"
+    },
+    {
+      "approval_step": "approve-plan",
+      "target_step": "plan",
+      "feedback": "Add failure reporting.",
+      "requested_at": "2026-08-26T11:00:15.000Z",
+      "status": "pending"
+    }
+  ]
+}

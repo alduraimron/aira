@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "20260826-100003-a1000003",
+  "workflow": "legacy-review",
+  "status": "cancelled",
+  "input": {
+    "task": "Propose a reviewed change"
+  },
+  "started_at": "2026-08-26T10:00:03.000Z",
+  "updated_at": "2026-08-26T10:03:03.000Z",
+  "steps": {
+    "plan": {
+      "status": "completed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:00:04.000Z",
+      "completed_at": "2026-08-26T10:01:03.000Z",
+      "success": true,
+      "summary": "Proposed the initial plan.",
+      "artifact": "artifacts/plan-v1.md",
+      "output": "The plan is ready for review."
+    },
+    "approve-plan": {
+      "status": "completed",
+      "attempt": 0,
+      "completed_at": "2026-08-26T10:03:03.000Z",
+      "success": false,
+      "result": "cancelled"
+    },
+    "verify": {
+      "status": "pending",
+      "attempt": 0
+    }
+  },
+  "artifacts": {
+    "plan": {
+      "current": "artifacts/plan-v1.md",
+      "versions": ["artifacts/plan-v1.md"]
+    }
+  }
+}

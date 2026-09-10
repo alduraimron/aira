@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "id": "20260826-110005-b1000005",
+  "workflow": "legacy-invalid",
+  "status": "running",
+  "input": {},
+  "started_at": "2026-08-26T11:00:05.000Z",
+  "updated_at": "2026-08-26T11:00:05.000Z",
+  "steps": {
+    "repair-loop": {
+      "status": "running",
+      "attempt": 1,
+      "steps": {
+        "check": { "status": "pending", "attempt": 0 }
+      }
+    }
+  },
+  "artifacts": {}
+}

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "id": "20260826-100002-a1000002",
+  "workflow": "legacy-shell",
+  "status": "failed",
+  "input": {
+    "task": "Preserve a negative shell result"
+  },
+  "current_step": "verify",
+  "started_at": "2026-08-26T10:00:02.000Z",
+  "updated_at": "2026-08-26T10:01:02.000Z",
+  "steps": {
+    "verify": {
+      "status": "failed",
+      "attempt": 1,
+      "started_at": "2026-08-26T10:00:03.000Z",
+      "completed_at": "2026-08-26T10:01:02.000Z",
+      "success": false,
+      "exit_code": 2,
+      "output": "STDOUT:\n1 test passed\n\n\nSTDERR:\nFAIL: expected a rollback record\n"
+    },
+    "optional-check": {
+      "status": "pending",
+      "attempt": 0
+    }
+  },
+  "artifacts": {}
+}
