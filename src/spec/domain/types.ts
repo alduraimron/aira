@@ -1,0 +1,9 @@
+import type { z } from "zod";
+import type { completionPolicySchema, specSchema } from "./schema";
+export type Spec = z.infer<typeof specSchema>;
+export type SpecCompletionPolicy = z.infer<typeof completionPolicySchema>;
+export type { ArtifactKind, ArtifactReference, ArtifactSubject, ArtifactRevision, ValidationRecord, ApprovedSpecSnapshot } from "./artifacts";
+export type { Requirement, AcceptanceCriterion, Requirements } from "./requirements";
+export type { Design, DesignDecision } from "./design";
+export type { Analysis, AnalysisFinding } from "./analysis";
+export type { SpecMode, SpecLifecycle, LifecycleStatus } from "./lifecycle";

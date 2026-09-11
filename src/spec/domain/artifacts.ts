@@ -1,0 +1,76 @@
+import { z } from "zod";
+import { artifactRevisionIdSchema, approvalIdSchema, specIdSchema } from "./ids";
+import { blobReferenceSchema, contentHashSchema, createdMetadataSchema, nonBlankSchema, policyReferenceSchema, profileReferenceSchema, unique, exact, type DeepReadonly, type DomainIssue } from "./primitives";
+import { specGenerationSchema } from "./generations";
+
+export const artifactKindSchema = z.enum(["intent", "requirements", "design", "tasks", "analysis", "verification-plan"]);
+export const approvalArtifactKindSchema = z.enum(["requirements", "design", "tasks", "verification-plan"]);
+export const artifactReferenceSchema = z.strictObject({
+  kind: artifactKindSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema,
+});
+export const artifactSubjectSchema = z.strictObject({
+  artifact: artifactReferenceSchema,
+  // Digest of IMMUTABLE content provenance. validated_against remains separate
+  // applicability, so revalidating unchanged design does not require new human content approval.
+  lineage_hash: contentHashSchema,
+});
+export const provenanceEdgeSchema = z.discriminatedUnion("relation", [
+  z.strictObject({ relation: z.literal("derived_from"), target: artifactReferenceSchema }),
+  z.strictObject({ relation: z.literal("generated_from_intent"), target: artifactReferenceSchema.refine((r) => r.kind === "intent") }),
+  z.strictObject({ relation: z.literal("supersedes"), target: artifactReferenceSchema }),
+]);
+export const artifactRevisionSchema = z.strictObject({
+  schema: z.literal("aira.dev/artifact-revision/v1"), id: artifactRevisionIdSchema,
+  spec_id: specIdSchema, kind: artifactKindSchema, content: blobReferenceSchema,
+  created: createdMetadataSchema, lineage: z.array(provenanceEdgeSchema),
+}).superRefine((r, ctx) => {
+  if (!unique(r.lineage.map((e) => `${e.relation}:${e.target.revision}`)))
+    ctx.addIssue({ code: "custom", message: "duplicate-lineage-edge" });
+  for (const edge of r.lineage) {
+    if (edge.target.revision === r.id) ctx.addIssue({ code: "custom", message: "self-lineage" });
+    if (edge.relation === "supersedes" && edge.target.kind !== r.kind)
+      ctx.addIssue({ code: "custom", message: "supersedes-kind-mismatch" });
+  }
+  if (r.lineage.filter((e) => e.relation === "supersedes").length > 1)
+    ctx.addIssue({ code: "custom", message: "multiple-predecessors" });
+});
+export const validationRecordSchema = z.strictObject({
+  schema: z.literal("aira.dev/lineage-validation/v1"),
+  relation: z.literal("validated_against"), subject: artifactReferenceSchema,
+  against: z.array(artifactReferenceSchema).min(1), analysis: artifactReferenceSchema.refine((r) => r.kind === "analysis"),
+  outcome: z.enum(["consistent", "inconsistent", "unknown"]),
+  generation: specGenerationSchema, created: createdMetadataSchema,
+}).refine((r) => unique(r.against.map((a) => a.kind)) && r.against.every((a) => a.revision !== r.subject.revision), "invalid-validation-inputs");
+export const artifactInvalidationSchema = z.strictObject({
+  schema: z.literal("aira.dev/artifact-invalidation/v1"), subject: artifactReferenceSchema,
+  generation: specGenerationSchema, reason: nonBlankSchema, created: createdMetadataSchema,
+});
+export const approvedSpecSnapshotSchema = z.strictObject({
+  schema: z.literal("aira.dev/approved-spec-snapshot/v1"), spec_id: specIdSchema,
+  generation: specGenerationSchema, artifacts: z.array(artifactSubjectSchema).min(3),
+  approvals: z.array(approvalIdSchema).min(1),
+  decision_policy: policyReferenceSchema, completion_policy: policyReferenceSchema,
+  verification_profile: profileReferenceSchema, capability_policies: z.array(policyReferenceSchema),
+}).refine((s) => unique(s.artifacts.map((a) => a.artifact.kind)) &&
+  ["requirements", "design", "tasks"].every((k) => s.artifacts.some((a) => a.artifact.kind === k)) &&
+  unique(s.approvals) && unique(s.capability_policies.map((p) => p.id)), "invalid-approved-snapshot");
+export const intentSchema = z.strictObject({
+  schema: z.literal("aira.dev/intent/v1"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
+  statement: nonBlankSchema, constraints: z.array(nonBlankSchema), metadata: createdMetadataSchema,
+});
+export type ArtifactKind = z.infer<typeof artifactKindSchema>;
+export type ArtifactReference = z.infer<typeof artifactReferenceSchema>;
+export type ArtifactSubject = z.infer<typeof artifactSubjectSchema>;
+export type ArtifactRevision = DeepReadonly<z.infer<typeof artifactRevisionSchema>>;
+export type ValidationRecord = DeepReadonly<z.infer<typeof validationRecordSchema>>;
+export type ArtifactInvalidation = DeepReadonly<z.infer<typeof artifactInvalidationSchema>>;
+export type ApprovedSpecSnapshot = DeepReadonly<z.infer<typeof approvedSpecSnapshotSchema>>;
+export const referenceOf = (revision: ArtifactRevision): ArtifactReference => ({
+  kind: revision.kind, revision: revision.id, hash: revision.content.hash,
+});
+export const sameArtifact = (a: ArtifactReference, b: ArtifactReference): boolean =>
+  a.kind === b.kind && a.revision === b.revision && a.hash === b.hash;
+/** A later store can use this predicate before accepting an existing immutable identity. */
+export function validateImmutableRevision(previous: ArtifactRevision, candidate: ArtifactRevision): DomainIssue[] {
+  return previous.id === candidate.id && !exact(previous, candidate) ? [{ code: "immutable-revision-overwrite", subject: previous.id }] : [];
+}
