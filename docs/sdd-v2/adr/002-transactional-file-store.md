@@ -1,6 +1,7 @@
 # ADR-002: Transactional file store with one publication point
 
-Status: accepted. Normative for v2; implementation is deferred.
+Status: accepted. Normative for v2. The stage-4 implementation is specified in the
+[file persistence contract](../storage-contract.md); the decisions below are unchanged.
 
 ## Context
 
@@ -40,7 +41,8 @@ Recovery reads and validates HEAD and the immutable records it selects. It MUST 
 
 ## Consequences
 
-Crash testing must cover every durability/publication boundary and multi-process contention. Independent atomic file replacements, a JSONL-only journal, and last-writer-wins saves are rejected. This task does not implement the store or change v1 saving behavior.
+Crash testing must cover every durability/publication boundary and multi-process contention. Independent atomic file replacements, a JSONL-only journal, and last-writer-wins saves are rejected. The original documentation stage did not implement the store or change v1 saving behavior.
+Stage 4 implements this protocol separately from v1; it does not change v1 saving behavior.
 
 ## Invariants
 

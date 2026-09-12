@@ -6,6 +6,8 @@ import { blobReferenceSchema, contentHashSchema, nonBlankSchema, policyReference
 import { contextSnapshotReferenceSchema } from "../context/snapshot";
 import { executionBackendSchema, workspaceFingerprintSchema } from "../workspace/schema";
 import { attemptOutcomeSchema, recoveryDeclarationSchema, retryPolicySchema } from "./recovery";
+import { attemptBehaviorSchema, pinsPolicy, pinsProfile } from "../builtins/bindings";
+import { containsPins } from "../builtins/roles";
 
 export const taskDefinitionReferenceSchema = z.strictObject({ id: taskIdSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema });
 export const taskExecutionStatusSchema = z.enum(["pending", "ready", "claimed", "running", "verifying", "completed", "failed", "blocked", "interrupted", "skipped", "cancelled", "unknown"]);
@@ -34,11 +36,14 @@ export const attemptRecordSchema = z.strictObject({
   snapshot: approvedSpecSnapshotSchema, run_generation: runGenerationSchema,
   context: z.array(contextSnapshotReferenceSchema), policy: policyReferenceSchema,
   execution_profile: profileReferenceSchema, workspace: workspaceFingerprintSchema, backend: executionBackendSchema,
+  behavior: attemptBehaviorSchema,
   recovery: z.array(recoveryDeclarationSchema),
   started_at: timestampSchema, ended_at: timestampSchema, outcome: attemptOutcomeSchema,
   external_effects: z.enum(["none", "known", "unknown"]), outputs: z.array(blobReferenceSchema),
 }).refine((a) => a.id === a.fence.attempt && a.run === a.fence.run && Date.parse(a.ended_at) >= Date.parse(a.started_at) &&
-  unique(a.context.map((c) => c.id)), "invalid-attempt-binding");
+  unique(a.context.map((c) => c.id)) && pinsPolicy(a.behavior.pins, a.policy) &&
+  pinsProfile(a.behavior.pins, "execution-profile", a.execution_profile) &&
+  containsPins(a.behavior.pins, a.snapshot.behavioral_assets.filter((p) => p.role === "capability-profile")), "invalid-attempt-binding");
 export const attemptAuthoritySchema = z.strictObject({
   attempt: attemptIdSchema, fence: fenceTokenSchema, snapshot: approvedSpecSnapshotSchema,
   status: z.enum(["active", "published", "fenced"]), generation: runGenerationSchema,

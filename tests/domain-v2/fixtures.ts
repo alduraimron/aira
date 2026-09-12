@@ -15,6 +15,7 @@ import { contextSnapshotSchema } from "../../src/context/snapshot";
 import type { SpecMode } from "../../src/spec/domain/lifecycle";
 import type { CompletionInput } from "../../src/spec/domain/completion";
 import type { EvidenceContext } from "../../src/verification/applicability";
+import { baseBehavioralPins, baseBehavioralCatalog, syntheticEnvironment } from "./behavioral-fixtures";
 
 // Symbolic synthetic identities, not claims about hashed filesystem bytes.
 export const hash = (n = 1) => contentHashSchema.parse(`sha256:${n.toString(16).padStart(64, "0")}`);
@@ -62,7 +63,7 @@ export function declaration(required = true) {
 }
 export function snapshot() {
   return contextSnapshotSchema.parse({ schema: "aira.dev/context-snapshot/v1", id: "snapshot_one", workspace_id: "workspace_one",
-    fingerprint: fingerprint(), resolver: profile("resolver"), resolver_policy: profile("context"),
+    fingerprint: fingerprint(), resolver: profile("resolver"), resolver_policy: profile("context"), behavioral_assets: baseBehavioralPins().filter((p) => p.role === "context-profile"),
     phase: "implementation", task: "T1", at, ordering: "logical-path-codepoint", total_bytes: 10,
     entries: [{ logical_path: "src/a.ts", canonical_path_identity: "test:///workspace/src/a.ts", content_hash: hash(54), byte_size: 10, order: 0,
       inclusion: "inline", classification: "untrusted", reasons: [{ declaration: "context_code", description: "required source" }] }] });
@@ -72,7 +73,7 @@ export function task(id = "T1", dependencies: string[] = []) {
     title: "Implement export", kind: "implementation", description: "Add export", outcome: "Users can export",
     requirements: ["R1"], acceptance_criteria: ["R1.AC1"], design_decisions: ["D1"], dependencies, required: true,
     completion: [{ kind: "verification", verifier: "V1" }], verifiers: ["V1"],
-    context: { declarations: [declaration()], references: [] }, capability_policy: policyRef("task"), execution_profile: profile("execute"),
+    context: { declarations: [declaration()], references: [] }, capability_policy: policyRef("task"), execution_profile: profile("execute"), behavioral_selections: [],
     workspace: { providers: ["git-worktree"], isolation: "isolated-required", repository_required: true, backend_requirements: ["process_confinement"] },
     scheduling: { priority: 0, exclusive_resources: [], labels: [] } });
 }
@@ -115,7 +116,7 @@ export function fixture(mode: SpecMode = "requirements-first", authoringOrder: "
     approval: a.id, spec_id: "spec_one", subject, generation: "10", status: "applicable", carried_from: a.committed_generation,
     reason: "Exact unchanged subjects carried through independent authoring/lifecycle commits", created: metadata })));
   const baseSpec = specSchema.parse({ schema: "aira.dev/spec/v1", id: "spec_one", title: "Export", kind: "feature", mode,
-    authoring_order: authoringOrder, lifecycle: { state: "verifying" }, commit_sequence: "20", generation: "10",
+    authoring_order: authoringOrder, lifecycle: { state: "verifying" }, commit_sequence: "20", generation: "10", behavioral_selections: [], behavioral_profiles: [],
     artifacts: { current: subjects, proposed: [], superseded: [] }, analyses: analysisRevisions.map(referenceOf),
     lineage: { validations: [{ schema: "aira.dev/lineage-validation/v1", relation: "validated_against", subject: referenceOf(des), against: [referenceOf(req)],
       analysis: referenceOf(analysisRevisions[3]!), outcome: "consistent", generation: "4", created: metadata }], invalidations: [] },
@@ -130,17 +131,19 @@ export function fixture(mode: SpecMode = "requirements-first", authoringOrder: "
     metadata: { labels: [], external_references: [] } });
   const approved = approvedSpecSnapshotSchema.parse({ schema: "aira.dev/approved-spec-snapshot/v1", spec_id: baseSpec.id, generation: "8",
     artifacts: baseSpec.artifacts.current, approvals: baseSpec.approvals, decision_policy: baseSpec.decision_policy.identity,
-    completion_policy: baseSpec.completion_policy.identity, verification_profile: plan.profile, capability_policies: [policyRef("task")] });
+    completion_policy: baseSpec.completion_policy.identity, verification_profile: plan.profile, capability_policies: [policyRef("task")],
+    behavioral_profiles: [], behavioral_assets: baseBehavioralPins() });
   const spec = specSchema.parse({ ...baseSpec, run_binding: { run: "run_one", snapshot: approved, applicable_generation: "10", status: "applicable" } });
   const attempt = attemptRecordSchema.parse({ schema: "aira.dev/attempt/v1", id: "attempt_one", operation: "operation_execute", run: "run_one", task: tasks.tasks[0]!.identity,
     fence: { run: "run_one", claim: "claim_one", attempt: "attempt_one", owner: "local-scheduler", epoch: "1" }, snapshot: approved, run_generation: "3",
     context: [{ id: "snapshot_one", hash: hash(55) }], policy: policyRef("task"), execution_profile: profile("execute"), workspace: fingerprint(), backend: backend(),
+    behavior: { purpose: "implementation", pins: baseBehavioralPins() },
     recovery: plan.verifiers[0]!.recovery, started_at: started, ended_at: ended, outcome: "succeeded", external_effects: "known", outputs: [] });
   const state = taskExecutionStateSchema.parse({ schema: "aira.dev/task-state/v1", task: tasks.tasks[0]!.identity, run: "run_one", run_generation: "5", status: "completed",
     current_attempt: attempt.id, updated_at: ended });
   const evidence = verificationEvidenceSchema.parse({ schema: "aira.dev/evidence/v1", id: "evidence_one", spec_id: spec.id, verifier: plan.verifiers[0]!.identity, profile: plan.profile,
     snapshot: approved, task: tasks.tasks[0]!.identity, attempt: attempt.id, workspace_before: fingerprint(), workspace_after: fingerprint(), observation: "stable", backend: backend(),
-    policy: policyRef("task"), context: attempt.context, started_at: started, ended_at: ended, outcome: "passed", outputs: [{ hash: hash(75), bytes: 4, media_type: "text/plain" }],
+    policy: policyRef("task"), context: attempt.context, behavioral_assets: baseBehavioralPins(), started_at: started, ended_at: ended, outcome: "passed", outputs: [{ hash: hash(75), bytes: 4, media_type: "text/plain" }],
     requirements: ["R1"], acceptance_criteria: ["R1.AC1"], applicability: { schema: "aira.dev/evidence-applicability/exact-workspace/v1" } });
   const run = executionRunSchema.parse({ schema: "aira.dev/execution-run/v1", id: "run_one", commit_sequence: "20", generation: "5", snapshot: approved, status: "verifying",
     scheduling: { max_parallel: 1, ordering: "priority-then-task-id-codepoint" }, tasks: [state], claims: [], attempts: [attempt.id],
@@ -151,7 +154,9 @@ export function fixture(mode: SpecMode = "requirements-first", authoringOrder: "
     policies: [policyRef("task")], execution_profiles: [profile("execute")], contexts: [] };
   const workspace = workspaceObservationSchema.parse({ schema: "aira.dev/workspace-observation/v1", fingerprint: fingerprint(), at: observed, consistency: "stable",
     coordination: { identity: "test-observation-barrier", contract: profile("coordination") } });
-  const input = { review, requirements, design, tasks, plan, catalog, run, attempts: [attempt], evidence: [evidence], workspace, backend: backend() } satisfies CompletionInput;
+  const input = { review, requirements, design, tasks, plan, catalog, run, attempts: [attempt], evidence: [evidence], workspace, backend: backend(),
+    behavioral: { catalog: baseBehavioralCatalog(), environment: syntheticEnvironment(), snapshots: [], contexts: [{ snapshot: snapshot(), verified_content_hash: hash(55) }] },
+  } satisfies CompletionInput;
   const evidenceContext = { snapshot: approved, task: tasks.tasks[0]!.identity, attempt, authority: run.authorities[0]!, workspace: fingerprint(), backend: backend(),
     verifier: plan.verifiers[0]!, profile: plan.profile, allow_agent_review: false, selected_evidence: evidence.id } satisfies EvidenceContext;
   return { ...input, spec, review, run, state, attempt, record: evidence, evidenceContext, intent, req, des, ts, planRevision, analysisRevisions };

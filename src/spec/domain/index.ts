@@ -12,3 +12,5 @@ export * from "./lineage";
 export * from "./review";
 export * from "./traceability";
 export * from "./completion";
+export * from "./kinds";
+export * from "./behavior";

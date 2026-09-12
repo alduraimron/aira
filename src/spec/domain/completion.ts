@@ -1,7 +1,7 @@
 import type { SpecReviewContext } from "./review";
 import { evaluateSpecGates, lineageContext, obligationWaived } from "./review";
 import { artifactApplicability } from "./lineage";
-import { sameArtifact, type ArtifactReference } from "./artifacts";
+import { sameArtifact, sameSpecBehavioralBindings, type ArtifactReference } from "./artifacts";
 import { exact, stableIssues, type DomainIssue } from "./primitives";
 import type { Requirements } from "./requirements";
 import type { Design } from "./design";
@@ -24,6 +24,9 @@ import { executionRunSchema, attemptRecordSchema } from "../../execution/schema"
 import { verificationPlanSchema, verificationEvidenceSchema } from "../../verification/schema";
 import { executionBackendSchema, workspaceObservationSchema } from "../../workspace/schema";
 import { humanWaiverSchema, specApprovalRecordSchema } from "../../approval/spec-records";
+import { validateSpecBehavioralBindings } from "./behavior";
+import { validateAttemptBehavior } from "../../execution/behavior";
+import { validatePinnedAssets } from "../../builtins/catalog";
 
 export interface CompletionInput {
   readonly review: SpecReviewContext;
@@ -37,6 +40,12 @@ export interface CompletionInput {
   readonly evidence: readonly VerificationEvidence[];
   readonly workspace: WorkspaceObservation;
   readonly backend: ExecutionBackend;
+  readonly behavioral: {
+    readonly catalog: Parameters<typeof validatePinnedAssets>[1];
+    readonly environment: Parameters<typeof validatePinnedAssets>[2];
+    readonly snapshots: Parameters<typeof validateSpecBehavioralBindings>[3];
+    readonly contexts: Parameters<typeof validateAttemptBehavior>[2];
+  };
 }
 export interface CompletionReport {
   readonly complete: boolean;
@@ -106,7 +115,8 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
   if (malformed.length) return { complete: false, blockers: stableIssues(malformed), traceability: { edges: [], requirements: [], evidence: [], issues: [] } };
   const { spec } = input.review, lineage = lineageContext(input.review), policy = spec.completion_policy;
   const kinds = policy.verification_plan_approval_required ? ["requirements", "design", "tasks", "verification-plan"] as const : ["requirements", "design", "tasks"] as const;
-  const blockers: DomainIssue[] = [...evaluateSpecGates(input.review, kinds), ...validateTaskGraph(input.tasks, input.catalog), ...validateEvidenceIdentities(input.evidence)];
+  const blockers: DomainIssue[] = [...evaluateSpecGates(input.review, kinds), ...validateTaskGraph(input.tasks, input.catalog), ...validateEvidenceIdentities(input.evidence),
+    ...validateSpecBehavioralBindings(spec, input.review.revisions, input.review.analyses, input.behavioral.snapshots, input.behavioral.catalog, input.behavioral.environment)];
   if (!["verifying", "completed"].includes(spec.lifecycle.state)) blockers.push({ code: "spec-not-completable", subject: spec.lifecycle.state });
   for (const [kind, artifact] of [["requirements", input.requirements], ["design", input.design], ["tasks", input.tasks], ["verification-plan", input.plan]] as const) {
     const current = spec.artifacts.current.find((s) => s.artifact.kind === kind);
@@ -127,11 +137,13 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
     const snapshot = binding.snapshot;
     if (snapshot.spec_id !== spec.id || !exact(snapshot.decision_policy, spec.decision_policy.identity) ||
       !exact(snapshot.completion_policy, policy.identity) || !exact(snapshot.verification_profile, input.plan.profile) ||
+      !sameSpecBehavioralBindings(snapshot.behavioral_profiles, spec.behavioral_profiles) ||
       !spec.artifacts.current.every((s) => snapshot.artifacts.some((a) => exact(a, s))) ||
       !snapshot.artifacts.every((s) => spec.artifacts.current.some((a) => exact(a, s))) ||
       !snapshot.approvals.every((a) => spec.approvals.includes(a)) ||
       !input.tasks.tasks.every((t) => snapshot.capability_policies.some((p) => exact(p, t.capability_policy))))
       blockers.push({ code: "run-snapshot-inapplicable" });
+    blockers.push(...validatePinnedAssets(snapshot.behavioral_assets, input.behavioral.catalog, input.behavioral.environment));
   }
   if (input.workspace.consistency !== "stable") blockers.push({ code: "workspace-observation-unknown" });
   if (run) {
@@ -156,6 +168,7 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
       const attempts = input.attempts.filter((a) => a.id === state?.current_attempt);
       const attempt = attempts.length === 1 ? attempts[0] : undefined;
       const authority = run?.authorities.filter((a) => a.attempt === attempt?.id);
+      if (attempt) blockers.push(...validateAttemptBehavior(attempt, task, input.behavioral.contexts, input.behavioral.catalog, input.behavioral.environment));
       if (!attempt || attempt.outcome !== "succeeded" || attempt.run !== run?.id || !run.attempts.includes(attempt.id) ||
         !exact(attempt.task, task.identity) || !exact(attempt.policy, task.capability_policy) || !exact(attempt.execution_profile, task.execution_profile) ||
         !binding || !sameApprovedSnapshot(attempt.snapshot, binding.snapshot) || authority?.length !== 1 || authority[0]!.status !== "published" ||

@@ -2,6 +2,9 @@ import { z } from "zod";
 import { artifactRevisionIdSchema, approvalIdSchema, specIdSchema } from "./ids";
 import { blobReferenceSchema, contentHashSchema, createdMetadataSchema, nonBlankSchema, policyReferenceSchema, profileReferenceSchema, unique, exact, type DeepReadonly, type DomainIssue } from "./primitives";
 import { specGenerationSchema } from "./generations";
+import { behavioralProfileSnapshotReferenceSchema } from "../../builtins/snapshots";
+import { authoringBehavioralPhaseSchema, behavioralPinsSchema, hasRoles } from "../../builtins/roles";
+import { pinsPolicy, pinsProfile } from "../../builtins/bindings";
 
 export const artifactKindSchema = z.enum(["intent", "requirements", "design", "tasks", "analysis", "verification-plan"]);
 export const approvalArtifactKindSchema = z.enum(["requirements", "design", "tasks", "verification-plan"]);
@@ -23,7 +26,10 @@ export const artifactRevisionSchema = z.strictObject({
   schema: z.literal("aira.dev/artifact-revision/v1"), id: artifactRevisionIdSchema,
   spec_id: specIdSchema, kind: artifactKindSchema, content: blobReferenceSchema,
   created: createdMetadataSchema, lineage: z.array(provenanceEdgeSchema),
+  behavioral_profile: behavioralProfileSnapshotReferenceSchema.optional(),
 }).superRefine((r, ctx) => {
+  if (r.created.by.kind !== "human" && !r.behavioral_profile)
+    ctx.addIssue({ code: "custom", message: "generated-artifact-behavioral-profile-required" });
   if (!unique(r.lineage.map((e) => `${e.relation}:${e.target.revision}`)))
     ctx.addIssue({ code: "custom", message: "duplicate-lineage-edge" });
   for (const edge of r.lineage) {
@@ -45,15 +51,32 @@ export const artifactInvalidationSchema = z.strictObject({
   schema: z.literal("aira.dev/artifact-invalidation/v1"), subject: artifactReferenceSchema,
   generation: specGenerationSchema, reason: nonBlankSchema, created: createdMetadataSchema,
 });
+export const specBehavioralBindingSchema = z.strictObject({
+  output: artifactReferenceSchema, phase: authoringBehavioralPhaseSchema,
+  snapshot: behavioralProfileSnapshotReferenceSchema, generation: specGenerationSchema,
+}).refine((b) => ({ clarification: ["intent"], "requirements-generation": ["requirements"], "design-generation": ["design"],
+  "task-generation": ["tasks", "verification-plan"], "requirements-analysis": ["analysis"], "design-analysis": ["analysis"], "task-analysis": ["analysis"], "final-spec-review": ["analysis"] })[b.phase].includes(b.output.kind), "behavioral-output-phase-mismatch");
+export const specBehavioralBindingsSchema = z.array(specBehavioralBindingSchema)
+  .refine((bs) => unique(bs.map((b) => b.output.revision)), "duplicate-behavioral-output-binding");
 export const approvedSpecSnapshotSchema = z.strictObject({
   schema: z.literal("aira.dev/approved-spec-snapshot/v1"), spec_id: specIdSchema,
   generation: specGenerationSchema, artifacts: z.array(artifactSubjectSchema).min(3),
   approvals: z.array(approvalIdSchema).min(1),
   decision_policy: policyReferenceSchema, completion_policy: policyReferenceSchema,
   verification_profile: profileReferenceSchema, capability_policies: z.array(policyReferenceSchema),
+  behavioral_profiles: specBehavioralBindingsSchema, behavioral_assets: behavioralPinsSchema,
 }).refine((s) => unique(s.artifacts.map((a) => a.artifact.kind)) &&
   ["requirements", "design", "tasks"].every((k) => s.artifacts.some((a) => a.artifact.kind === k)) &&
-  unique(s.approvals) && unique(s.capability_policies.map((p) => p.id)), "invalid-approved-snapshot");
+  unique(s.approvals) && unique(s.capability_policies.map((p) => p.id)) &&
+  specGenerationSchema.safeParse(s.generation).success &&
+  s.behavioral_profiles.every((b) => specGenerationSchema.safeParse(b.generation).success && BigInt(b.generation) <= BigInt(s.generation)) &&
+  hasRoles(s.behavioral_assets, ["implementation", "context-profile", "capability-profile", "execution-profile", "verification-profile"]) &&
+  pinsProfile(s.behavioral_assets, "verification-profile", s.verification_profile) &&
+  s.capability_policies.every((p) => pinsPolicy(s.behavioral_assets, p)) &&
+  s.behavioral_assets.every((p) => {
+    const asset = p.asset;
+    return asset.kind !== "capability-policy-profile" || s.capability_policies.some((policy) => exact(policy, asset.policy));
+  }), "invalid-approved-snapshot");
 export const intentSchema = z.strictObject({
   schema: z.literal("aira.dev/intent/v1"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
   statement: nonBlankSchema, constraints: z.array(nonBlankSchema), metadata: createdMetadataSchema,
@@ -65,6 +88,9 @@ export type ArtifactRevision = DeepReadonly<z.infer<typeof artifactRevisionSchem
 export type ValidationRecord = DeepReadonly<z.infer<typeof validationRecordSchema>>;
 export type ArtifactInvalidation = DeepReadonly<z.infer<typeof artifactInvalidationSchema>>;
 export type ApprovedSpecSnapshot = DeepReadonly<z.infer<typeof approvedSpecSnapshotSchema>>;
+export function sameSpecBehavioralBindings(a: ApprovedSpecSnapshot["behavioral_profiles"], b: ApprovedSpecSnapshot["behavioral_profiles"]): boolean {
+  return a.length === b.length && a.every((binding) => b.some((other) => exact(binding, other)));
+}
 export const referenceOf = (revision: ArtifactRevision): ArtifactReference => ({
   kind: revision.kind, revision: revision.id, hash: revision.content.hash,
 });

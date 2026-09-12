@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { approvalIdSchema, identityRegistrySchema, revisionRequestIdSchema, specIdSchema, waiverIdSchema } from "./ids";
-import { artifactReferenceSchema, artifactSubjectSchema, artifactInvalidationSchema, validationRecordSchema } from "./artifacts";
+import { artifactReferenceSchema, artifactSubjectSchema, artifactInvalidationSchema, validationRecordSchema, specBehavioralBindingsSchema } from "./artifacts";
+import { specKindSchema } from "./kinds";
+import { behavioralSelectionsSchema } from "../../builtins/roles";
 import { commitSequenceSchema, specGenerationSchema } from "./generations";
 import { lifecycleSchema, specModeSchema, lifecycleAllowedForMode } from "./lifecycle";
 import { createdMetadataSchema, nonBlankSchema, policyReferenceSchema, timestampSchema, unique } from "./primitives";
@@ -15,11 +17,13 @@ export const completionPolicySchema = z.strictObject({
 });
 export const specSchema = z.strictObject({
   schema: z.literal("aira.dev/spec/v1"), id: specIdSchema, title: nonBlankSchema,
-  kind: z.enum(["feature", "bugfix", "refactor", "migration", "custom"]), custom_kind: nonBlankSchema.optional(),
+  kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
   mode: specModeSchema, authoring_order: z.enum(["requirements-first", "design-first"]), lifecycle: lifecycleSchema,
   commit_sequence: commitSequenceSchema.optional(), generation: specGenerationSchema,
   artifacts: z.strictObject({ current: z.array(artifactSubjectSchema), proposed: z.array(artifactReferenceSchema), superseded: z.array(artifactReferenceSchema) }),
   analyses: z.array(artifactReferenceSchema.refine((a) => a.kind === "analysis")),
+  // Exact, explicit future selections and immutable per-output history are separate.
+  behavioral_selections: behavioralSelectionsSchema, behavioral_profiles: specBehavioralBindingsSchema,
   lineage: z.strictObject({ validations: z.array(validationRecordSchema), invalidations: z.array(artifactInvalidationSchema) }),
   approvals: z.array(approvalIdSchema), approval_applicability: z.array(approvalApplicabilitySchema),
   revisions: z.array(revisionRequestIdSchema), waivers: z.array(waiverIdSchema), waiver_applicability: z.array(waiverApplicabilitySchema), identities: identityRegistrySchema,
@@ -39,5 +43,6 @@ export const specSchema = z.strictObject({
   if (!unique(s.approval_applicability.map((a) => `${a.approval}:${a.subject.artifact.kind}`))) issue("duplicate-approval-applicability");
   if (!unique(s.waiver_applicability.map((a) => a.waiver)) || s.waiver_applicability.some((a) => a.spec_id !== s.id || !s.waivers.includes(a.waiver) || a.generation !== s.generation)) issue("invalid-current-waiver-binding");
   if (s.run_binding && (s.run_binding.snapshot.spec_id !== s.id || BigInt(s.run_binding.applicable_generation) > BigInt(s.generation))) issue("invalid-spec-run-binding");
+  if (s.behavioral_profiles.some((b) => BigInt(b.generation) > BigInt(s.generation))) issue("future-behavioral-profile-binding");
   if (Date.parse(s.updated_at) < Date.parse(s.created.at)) issue("invalid-spec-timestamps");
 });

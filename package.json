@@ -14,7 +14,9 @@
     ".": "./src/index.ts",
     "./core": "./src/core/index.ts",
     "./agent": "./src/agent/index.ts",
-    "./pi": "./src/pi/index.ts"
+    "./pi": "./src/pi/index.ts",
+    "./storage": "./src/storage/index.ts",
+    "./storage/file": "./src/storage/file/index.ts"
   },
   "pi": {
     "extensions": [

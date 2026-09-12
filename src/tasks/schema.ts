@@ -5,6 +5,7 @@ import { contentHashSchema, nonBlankSchema, policyReferenceSchema, profileRefere
 import { contextDeclarationSchema } from "../context/declarations";
 import { taskDefinitionReferenceSchema } from "../execution/schema";
 import { workspaceRequirementsSchema } from "../workspace/schema";
+import { taskBehavioralSelectionsSchema } from "../builtins/roles";
 
 export const completionConditionSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("verification"), verifier: verifierIdSchema }),
@@ -20,6 +21,7 @@ export const taskDefinitionSchema = z.strictObject({
   context: z.strictObject({ declarations: z.array(contextDeclarationSchema),
     references: z.array(z.strictObject({ id: contextDeclarationIdSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema })) }),
   capability_policy: policyReferenceSchema, execution_profile: profileReferenceSchema,
+  behavioral_selections: taskBehavioralSelectionsSchema,
   workspace: workspaceRequirementsSchema,
   scheduling: z.strictObject({ priority: safeUnsignedSchema, estimated_cost: safeUnsignedSchema.optional(),
     exclusive_resources: z.array(nonBlankSchema), labels: z.array(nonBlankSchema) }),

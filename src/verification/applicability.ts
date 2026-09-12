@@ -1,10 +1,12 @@
-import type { ApprovedSpecSnapshot } from "../spec/domain/artifacts";
+import { sameSpecBehavioralBindings, type ApprovedSpecSnapshot } from "../spec/domain/artifacts";
 import { canonical, exact, stableIssues, type DomainIssue, type ProfileReference } from "../spec/domain/primitives";
 import type { AttemptAuthority, AttemptRecord, TaskDefinitionReference } from "../execution/types";
 import type { ExecutionBackend, WorkspaceFingerprint } from "../workspace/types";
 import { checkBackendRequirements, sameWorkspaceFingerprint } from "../workspace/fingerprint";
 import type { EvidenceApplicability, VerificationEvidence, VerifierDefinition } from "./types";
 import { evidenceApplicabilityContractSchema } from "./schema";
+import { containsPins, sameBehavioralPins } from "../builtins/roles";
+import { pinsProfile } from "../builtins/bindings";
 
 export interface EvidenceContext {
   readonly snapshot: ApprovedSpecSnapshot;
@@ -24,6 +26,8 @@ export function sameApprovedSnapshot(a: ApprovedSpecSnapshot, b: ApprovedSpecSna
     exact([...a.approvals].sort(), [...b.approvals].sort()) &&
     exact(a.decision_policy, b.decision_policy) && exact(a.completion_policy, b.completion_policy) &&
     exact(a.verification_profile, b.verification_profile) &&
+    sameSpecBehavioralBindings(a.behavioral_profiles, b.behavioral_profiles) &&
+    sameBehavioralPins(a.behavioral_assets, b.behavioral_assets) &&
     exact([...a.capability_policies].sort((x, y) => x.id < y.id ? -1 : 1), [...b.capability_policies].sort((x, y) => x.id < y.id ? -1 : 1));
 }
 /** Applicability and outcome are independent: historical failed evidence is still evidence. */
@@ -43,6 +47,11 @@ export function evidenceApplicability(evidence: VerificationEvidence, context: E
     !exact(context.authority.fence, context.attempt.fence) || !sameApprovedSnapshot(context.authority.snapshot, context.snapshot) ||
     !sameApprovedSnapshot(context.attempt.snapshot, context.snapshot)) add("evidence-attempt-fenced");
   if (Date.parse(evidence.started_at) < Date.parse(context.attempt.started_at) || Date.parse(evidence.ended_at) > Date.parse(context.attempt.ended_at)) add("evidence-attempt-interval-mismatch");
+  if (!containsPins(context.attempt.behavior.pins, evidence.behavioral_assets) ||
+    !containsPins(evidence.behavioral_assets, context.attempt.behavior.pins.filter((p) => p.role === "capability-profile"))) add("evidence-behavioral-assets-mismatch");
+  if (context.verifier.definition.kind === "agent-review" && !pinsProfile(evidence.behavioral_assets, "verification-review", context.verifier.definition.review_profile) &&
+    !pinsProfile(evidence.behavioral_assets, "implementation-review", context.verifier.definition.review_profile) &&
+    !pinsProfile(evidence.behavioral_assets, "final-spec-review", context.verifier.definition.review_profile)) add("evidence-review-asset-missing");
   if (evidence.context.length !== context.attempt.context.length || evidence.context.some((c) => !context.attempt.context.some((a) => exact(a, c)))) add("evidence-context-mismatch");
   if (evidence.requirements.some((r) => !context.verifier.requirements.includes(r)) ||
     evidence.acceptance_criteria.some((a) => !context.verifier.acceptance_criteria.includes(a)) ||

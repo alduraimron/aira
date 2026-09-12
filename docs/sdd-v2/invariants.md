@@ -9,6 +9,17 @@ Status: accepted, normative. Each `- INV-...: ...` line is one stable review/tes
 - INV-SPEC-003: Quick mode produces the same canonical requirements, design, and structured tasks and required analyses/validation; only intermediate human gates are removed.
 - INV-DOMAIN-001: Spec domain is pure and MUST NOT directly or transitively depend on filesystem/process adapters, Pi SDK, CLI/frontends, or the workflow executor; frontends call Core, not the reverse from domain.
 
+## Behavioral assets and product completeness (ADR-011)
+
+- INV-BUILTIN-001: Every Aira-owned behavioral asset that can materially affect specification generation, analysis, execution, verification, context selection, policy, or user decisions has an immutable versioned identity and content hash.
+- INV-BUILTIN-002: A Spec/run pins resolved behavioral asset revisions; changing future defaults cannot change the meaning of previously pinned execution or rewrite historical authoring provenance.
+- INV-BUILTIN-003: A missing, unknown, incompatible, or hash-mismatched pinned behavioral asset fails closed before durable use or dispatch; mutable aliases cannot identify persisted execution inputs.
+- INV-BUILTIN-004: Project customization is explicit and cannot silently replace an Aira built-in while retaining built-in identity/provenance; only the actual published built-in bytes may retain that published revision's attribution.
+- INV-BUILTIN-005: Built-in Spec kinds and modes use explicit production-grade profiles rather than all aliasing one generic minimal behavior; mode configuration cannot override hard Spec lifecycle invariants.
+- INV-BUILTIN-006: Behavioral resolution is deterministic and inspectable, resolves defaults to exact pins, and retains all capability restriction layers; child selections cannot widen parent restrictions.
+- INV-BUILTIN-007: Built-in assets are independently testable product code; complete production-grade content and its quality tests are required v2 release gates, as specified in release-completeness.md.
+- INV-DOC-001: A stable user-facing SDD capability is not release-complete until its conceptual and reference documentation exists; the documentation and end-to-end examples in release-completeness.md are product requirements, not optional polish.
+
 ## Storage and generations (ADR-002, ADR-003)
 
 - INV-STORE-001: At every recoverable crash boundary, authoritative state resolves to either the previous committed HEAD or the new committed HEAD, never a partially published aggregate.

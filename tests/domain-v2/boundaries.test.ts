@@ -4,8 +4,10 @@ import path from "node:path";
 import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "../../src");
-const domainFile = (file: string): boolean => /^(spec\/domain|tasks|revision|capabilities|verification|workspace|execution)\//.test(file) ||
+const domainFile = (file: string): boolean => /^(spec\/domain|builtins|tasks|revision|capabilities|verification|workspace|execution)\//.test(file) ||
   /^(approval\/spec-(records|policy)|context\/(declarations|snapshot))\.ts$/.test(file);
+// Stage 4 adds an explicit v2 adapter boundary, not another legacy runtime module.
+const storageFile = (file: string): boolean => file.startsWith("storage/");
 async function files(directory: string): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -44,12 +46,17 @@ test("INV-DOMAIN-001/AGENT-001/LEGACY-003: transitive v2 import closure is pure 
   }
   for (const file of all.filter((file) => domainFile(path.relative(root, file)))) await visit(file);
   expect(visited.size).toBeGreaterThan(35);
-  // The old runtime has no new domain imports; coexistence does not activate v2 behavior.
-  for (const file of all.filter((file) => !domainFile(path.relative(root, file)))) {
+  // Preserve every legacy runtime assertion. New storage adapters may depend inward
+  // on domain, but legacy runtime must activate neither domain nor storage.
+  for (const file of all.filter((file) => !domainFile(path.relative(root, file)) && !storageFile(path.relative(root, file)))) {
     const source = await readFile(file, "utf8"), ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
     for (const statement of ast.statements) if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) && statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
       const reference = statement.moduleSpecifier.text;
-      if (reference.startsWith(".")) expect(domainFile(path.relative(root, path.resolve(path.dirname(file), reference + ".ts")))).toBe(false);
+      if (reference.startsWith(".")) {
+        const target = path.relative(root, path.resolve(path.dirname(file), reference + ".ts"));
+        expect(domainFile(target)).toBe(false);
+        expect(storageFile(target)).toBe(false);
+      }
     }
   }
 });

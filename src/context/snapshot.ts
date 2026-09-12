@@ -4,6 +4,8 @@ import { contentHashSchema, nonBlankSchema, profileReferenceSchema, safeUnsigned
   compareText, stableIssues, type DomainIssue, type DeepReadonly } from "../spec/domain/primitives";
 import { workspaceFingerprintSchema } from "../workspace/schema";
 import { contextPhaseSchema, exactPathSchema, matchesPath, type ContextDeclaration } from "./declarations";
+import { behavioralPinsSchema } from "../builtins/roles";
+import { pinsProfile } from "../builtins/bindings";
 export const contextSnapshotReferenceSchema = z.strictObject({ id: contextSnapshotIdSchema, hash: contentHashSchema });
 export const contextSnapshotEntrySchema = z.strictObject({
   logical_path: exactPathSchema, canonical_path_identity: nonBlankSchema,
@@ -17,9 +19,10 @@ export const contextSnapshotSchema = z.strictObject({
   schema: z.literal("aira.dev/context-snapshot/v1"), id: contextSnapshotIdSchema,
   workspace_id: workspaceIdSchema, fingerprint: workspaceFingerprintSchema,
   resolver: profileReferenceSchema, resolver_policy: profileReferenceSchema,
+  behavioral_assets: behavioralPinsSchema,
   phase: contextPhaseSchema, task: taskIdSchema.optional(), at: timestampSchema,
   ordering: z.literal("logical-path-codepoint"), entries: z.array(contextSnapshotEntrySchema), total_bytes: safeUnsignedSchema,
-}).refine((s) => s.workspace_id === s.fingerprint.workspace_id &&
+}).refine((s) => pinsProfile(s.behavioral_assets, "context-profile", s.resolver_policy) && s.workspace_id === s.fingerprint.workspace_id &&
   s.entries.every((entry, i) => entry.order === i && (i === 0 || compareText(s.entries[i - 1]!.logical_path, entry.logical_path) < 0)) &&
   unique(s.entries.map((e) => e.logical_path)) &&
   s.entries.reduce((total, e) => total + BigInt(e.byte_size), 0n) === BigInt(s.total_bytes), "invalid-snapshot-order-or-size");

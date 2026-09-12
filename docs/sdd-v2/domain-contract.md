@@ -1,6 +1,11 @@
 # SDD v2 pure domain contract
 
-Implementation stage 3. This document maps the domain implementation to the accepted
+Implementation stage 3 plus the pre-storage behavioral asset contract (ADR-011).
+Stage 4 now persists these unchanged contracts through the separate
+[file storage foundation](storage-contract.md). Statements below about deferred
+storage describe the original pure-domain stage, not the current adapter status.
+
+This document maps the domain implementation to the accepted
 [architecture](architecture.md), [ADRs](architecture.md#adr-index), and
 [invariants](invariants.md). It does not replace or relax those decisions.
 
@@ -50,15 +55,18 @@ Contract identifiers introduced:
 | Capabilities | `capability-policy`, `effective-capability-policy`, `capability-escalation` |
 | Workspace | `workspace-handle`, `workspace-fingerprint`, `workspace-observation`, `execution-backend` |
 | Verification | `verification-plan`, `verifier`, `evidence`, `evidence-applicability/exact-workspace` |
+| Behavioral assets | `behavioral-asset`, `builtin-bundle`, `spec-kind-profile`, `mode-profile`, `behavioral-resolution-request`, `behavioral-resolution`, `behavioral-profile-snapshot` |
 
-`aira.dev/glob/v1` separately identifies the deterministic declaration grammar.
+`aira.dev/asset-bytes/raw/v1` separately identifies unnormalized effective asset bytes;
+self-identity envelopes are outside their content-hash subjects. `aira.dev/glob/v1`
+separately identifies the deterministic declaration grammar.
 Extension maps exist only for explicit custom verifier configuration and custom
 workspace/provider state. They are JSON data, not executable extensions or implicit
 permission grants.
 
 Human-facing IDs use positive decimal suffixes without leading zeroes:
 `R1`, `R1.AC1`, `D1`, `T1`, `V1`. An AC's requirement prefix must match its owner.
-Other IDs use `<prefix>_<token>`, where the token matches
+Except for the behavioral asset identities below, other IDs use `<prefix>_<token>`, where the token matches
 `[a-z0-9][a-z0-9_-]{0,63}`. Prefixes are `spec`, `rev`, `approval`, `revision`,
 `finding`, `run`, `attempt`, `evidence`, `workspace`, `policy`, `snapshot`,
 `context`, `operation`, `claim`, `waiver`, and `profile`. Each has its own Zod brand.
@@ -76,6 +84,97 @@ SpecGeneration, RunGeneration, and FenceEpoch are separately branded canonical d
 **u64 strings**. Checked successor operations reject overflow. Byte sizes, capacities,
 and scheduling priorities are nonnegative safe integers, with positive bounds where
 required. No counter uses imprecise JSON floating-point storage.
+
+## Behavioral assets, profiles and exact attribution
+
+[ADR-011](adr/011-versioned-behavioral-assets.md) closes the behavioral-input identity
+gap before storage is frozen. `src/builtins/` is pure product-asset domain code, not
+Spec artifact content, a filesystem registry or a built-in Markdown library.
+
+`BuiltinAssetId` identifies `builtin.<dotted-name>` or
+`project.<owner>.<dotted-name>` independently of paths. Separately branded asset/bundle
+revision IDs are canonical positive decimal u64 strings. `BuiltinBundleId` uses
+`bundle.aira.<dotted-name>`. Every revision has the existing SHA-256 hash, immutable
+provenance (`aira-builtin` or `project`), structured compatibility, publication metadata
+and optional exact earlier predecessor. Unknown schema/kind/role/source versions and
+mutable revision aliases are rejected.
+
+The first kinds are prompt-profile, analysis-profile, spec-kind-profile, mode-profile,
+skill, context-profile, capability-policy-profile, verification-profile, execution-profile
+and execution-recipe. The common reference union reuses `ProfileReference` for existing
+analysis/context/execution/recipe/verification profiles and `PolicyReference` for
+capability policy. Verifiers retain their existing identity through plans/evidence;
+there is no competing built-in policy/verifier identity model.
+
+Role/pin schemas distinguish required behavior from its exact implementation. The closed
+role vocabulary covers clarification, the six authoring generation/analysis activities,
+implementation, repair, implementation/verification/final-spec review, context, capability,
+verification and execution profiles, execution recipe, kind/mode profiles and Host skill.
+Pins contain exact asset revision/hash/provenance and optional exact bundle membership,
+not full asset bodies. Project IDs and owners must agree and cannot claim Aira bundles.
+
+Kind profiles carry the existing feature/bugfix/refactor/migration/custom kind plus
+nonempty exact role selections and required roles. Mode profiles configure authoring
+order and analysis/approval/review presentation but cannot relax lifecycle semantics.
+Quick retains canonical analyses and integrated human approval; it can use either
+canonical authoring order. Kind/profile-content differentiation is a release quality
+obligation, not something a schema can prove by checking labels alone.
+
+Bundle manifests contain exact shipped asset references, distribution metadata,
+compatibility, role defaults and typed kind/mode defaults. Schemas reject duplicate
+revision identities and inconsistent selections. `validateBuiltinBundleContents` checks
+all published members, nested selection closure and the actual kind/mode configurations;
+ordinary resolution can use a catalog containing only its needed exact revisions.
+The pure catalog represents supplied
+verified-content observations, not storage. Future authenticated decoders must establish
+that the measured bytes and decoded configuration/typed references agree. An asserted
+hash/provenance field alone is not proof. The revision/history/bundle immutability
+validators protect the entire published envelope, not only its content hash.
+
+Resolution returns ordered, inspectable candidates and effective pins. Ordinary precedence
+is task (execution-related slots only), Spec, kind, mode, bundle. Kind specializes mode;
+Spec-level selectors choose exact kind/mode profiles. Capability decisions retain **all**
+restriction layers and bridge into the existing policy compiler rather than replace
+parents. Every resolved exact reference must be available, authentic and compatible;
+there is no search for latest or fallback on errors. Compatibility checks domain/schema
+membership, closed runtime capabilities, actual backend requirements/identity and
+versioned asset interfaces without a dependency solver.
+
+The Spec has mandatory explicit `behavioral_selections` and append-only
+`behavioral_profiles` output bindings. An unassisted human-authored Spec can explicitly
+start with empty lists. A generated artifact must reference an immutable profile snapshot;
+absence is never a request to load hidden defaults. Snapshots record phase, observed Spec
+generation, exact request/decisions, identity/hash and creation provenance. Each of the
+six authoring phases can retain a different snapshot. Schema and cross-record validation
+bind analysis phases, output revision/hash, envelope references and snapshot hashes;
+snapshot validation replays only its recorded exact inputs.
+
+Adoption/addition is a semantic generation mutation, checked by
+`validateSpecBehavioralEvolution`. Historical bindings are not removed or rewritten.
+Design-first revalidation may use a new analysis snapshot without rewriting the unchanged
+design's original provenance or fabricating a content approval. Existing invalidation
+and fencing obligations remain authoritative for relevant selection changes.
+
+Approved Spec/run snapshots have mandatory authoring bindings and exact execution pins.
+Attempts have a required purpose and used pins, including the actual purpose, context,
+capability and execution profile. Context snapshots bind their resolver-policy profile
+pin. Evidence binds exact verification/policy/review selections and cannot attribute pins
+absent from its attempt or omit capability restriction layers. Task definitions have
+explicit allowed `behavioral_selections`; a task override cannot be inferred from a new
+global default. `validateAttemptBehavior` checks task/context references, parent layers,
+exact catalog availability and compatibility against the attempt's actual backend.
+Completion additionally requires supplied behavioral catalog/environment/snapshot/context
+observations and invokes closed binding/availability checks. Evidence and approved-snapshot
+comparisons include behavioral provenance. Historical records remain attributable when
+new defaults are published; future durable use of an unavailable pin fails closed.
+
+Raw content hashes exclude a record's own identity envelope to avoid self-hash cycles.
+Structured profile bodies include their versioned configuration and selected references;
+`asset` is attached outside those bytes. Snapshot/bundle bodies similarly exclude their
+own `identity`. Byte capture, parsing/authentication and immutable durable publication
+remain adapter/store obligations. No prompt/skill Markdown or default template is added.
+The [release-completeness checklist](release-completeness.md) requires production built-ins,
+independent quality tests, user conceptual/reference documentation and end-to-end examples.
 
 ## Spec, lifecycle, and canonical content
 
@@ -294,4 +393,9 @@ capability, workspace, execution, evidence, and legacy invariant families.
 Storage crash publication (INV-STORE-001/002/003), actual I/O confinement, workspace
 capture/coordination, and transactional claim/result publication remain obligations for
 later implementation stages, not claims established by these domain tests. No locked
-architecture contradiction was discovered. No invariant or ADR was changed.
+architecture contradiction was discovered. ADR-011 and INV-BUILTIN-001 through
+INV-BUILTIN-007 plus INV-DOC-001 now add the missing behavioral-asset/release contract;
+none of ADRs 001-010 or their invariants is relaxed. `tests/domain-v2/builtins/` adds
+identity/provenance, bundle, resolution, kind/mode, compatibility, snapshot, execution,
+capability composition and evidence-attribution coverage. Existing v2 fixtures now
+explicitly identify synthetic execution inputs; their assertions are not weakened.

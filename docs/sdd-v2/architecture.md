@@ -2,7 +2,7 @@
 
 Status: accepted, normative target contract for all v2 work.
 
-This directory defines the complete v2 architecture, even where implementation is staged. The first v2 persistence schema MUST represent this contract; a temporary simplified schema is not an acceptable implementation slice. This change freezes decisions and v1 evidence only. It does not implement Spec execution, transactional storage, migration, or a sandbox, and does not change current production behavior.
+This directory defines the complete v2 architecture, even where implementation is staged. The first v2 persistence schema MUST represent this contract; a temporary simplified schema is not an acceptable implementation slice. Pure domain contracts implement these decisions ahead of adapters. They do not implement Spec execution, transactional storage, migration, or a sandbox, and do not change current production behavior.
 
 [Current runtime architecture](../architecture.md) describes v1, not competing v2 lifecycle rules. MUST, MUST NOT, and REQUIRED below are normative. Reviews and future tests should cite the [stable invariants](invariants.md) and relevant ADR. A concrete technical impossibility must be reported before implementing a contradictory portion; staging alone is not grounds to redesign these decisions.
 
@@ -26,6 +26,7 @@ These are required representational capabilities from the first v2 schema, not o
 | --- | --- |
 | Spec lifecycle | Requirements-first, design-first, and quick modes; intent; current/proposed/superseded applicability; completion state |
 | Canonical artifacts | Requirements, design, structured tasks; immutable revision identities including content hashes; stable requirement, acceptance-criterion, and design-decision IDs; stable task identities with revisioned definitions |
+| Behavioral assets | Immutable versioned Aira/project asset identities, content hashes, provenance, compatibility, bundle manifests, closed role selections, kind/mode profiles, exact pins and phase-specific Spec/run/attempt attribution; never mutable filenames/default aliases |
 | Relationships | Typed lineage (`derived_from` distinct from `validated_against`); traceability; downstream invalidation and recorded revalidation |
 | Human decisions | Exact-bound approvals, revision requests/feedback/resolutions, policy-authorized waivers, actor and channel provenance |
 | Analysis | Immutable findings/results bound to analyzed revisions; finding severity/policy obligations, resolution and applicability |
@@ -47,9 +48,42 @@ An immutable artifact identity identifies a particular revision and its exact co
 - Tasks form a DAG. A dependency means predecessor domain state `completed`, which requires its configured completion policy, not worker success. Readiness operates on identities/sets, never a persisted sequential cursor. Initial execution policy is `max_parallel = 1`; definitions remain parallel-ready. See [ADR-005](adr/005-task-dag-semantics.md).
 - Approval/preparation binds exact artifacts and observed Spec generation. Human provenance requires at least `{ kind: human, id: local }` and channel (`cli`, `pi`) where known; no cloud identity is required. A worker, model, or arbitrary Core caller is not automatically a human. See [ADR-003](adr/003-generation-and-fencing.md).
 
+## Versioned behavioral assets and release quality
+
+Aira-owned prompts, analyses, skills, kind/mode/context/capability/verification/execution
+profiles and recipes are independently testable **product code**, separate from generated
+Spec artifacts. Published revisions are immutable, content-hash identified, provenance
+recorded and pinnable. Project overrides are explicit project-owned selections for logical
+roles, not replacement bytes masquerading as the original built-in. See
+[ADR-011](adr/011-versioned-behavioral-assets.md).
+
+Pure deterministic resolution produces inspectable exact pins before durable use.
+Ordinary precedence is task (only allowed roles), Spec, kind, mode, then bundle defaults;
+capability restrictions instead retain every layer with existing deny-wins composition.
+Profiles cannot override lifecycle or backend enforcement invariants. Unknown, missing,
+incompatible or hash-mismatched pinned revisions fail closed without fallback.
+
+Specs preserve phase-specific immutable profile snapshots in output lineage, including
+all six generation/analysis activities. Approved run snapshots, attempts, context and
+evidence preserve exact behavioral references. Future default changes never rewrite
+existing pins. Profile adoption is a controlled Spec semantic mutation subject to existing
+generation, invalidation and fencing rules. Revalidating unchanged design-first content
+may use a new analysis profile without changing its original authoring snapshot.
+
+Production-grade content, differentiated kinds/modes, independent content tests,
+conceptual/reference user documentation and end-to-end examples are REQUIRED release
+gates, not optional post-MVP polish. The complete minimum library/documentation/example
+checklist is [release-completeness.md](release-completeness.md). Recording that checklist
+does not implement prompts, skills, templates, content loading or Pi integration.
+
 ## Publication, execution, and recovery
 
 One authoritative HEAD selects an immutable committed aggregate. Lock/ownership, expected-state checks, durable immutable records, and atomic HEAD advancement provide transactional publication. Independently replacing `spec.yaml`, approval/artifact files, and `events.jsonl` does not. Markdown and YAML views, Markdown checkboxes, operator displays, and event views are derived, rebuildable, and non-authoritative. See [ADR-002](adr/002-transactional-file-store.md).
+
+Stage 4 implements the file-backed persistence foundation described in the
+[storage contract](storage-contract.md), including exact encodings, provider-neutral
+ports, immutable blobs/commits, HEAD CAS, process locks, explicit recovery and platform
+limitations. This does not connect workers, scheduling, frontends or v1 migration.
 
 Commit sequence orders every committed transaction. Spec generation changes only for Spec semantic/lifecycle mutations. Run generation governs execution bookkeeping, claims, attempts, reconciliation, and fencing. Lease renewal does not invalidate unrelated review. A run binds an exact approved Spec snapshot; superseding relevant Spec state fences old claims/results. See [ADR-003](adr/003-generation-and-fencing.md).
 
@@ -72,6 +106,7 @@ CLI / Pi frontend -> Core application -> domain decisions + provider-neutral por
 | Source boundary | Responsibility and dependency constraints |
 | --- | --- |
 | `src/spec/domain/**` | Pure Spec domain; no filesystem, Pi, CLI, or workflow executor imports |
+| `src/builtins/**` | Pure behavioral asset identities, revisions, provenance, typed role/profile selection, bundle manifests, exact pins, compatibility and deterministic resolution; no content loading or generated Spec artifacts |
 | `src/tasks/**` | Task definitions/schema, graph validation, deterministic readiness; pure definitions separate from execution effects |
 | `src/approval/**` | Keep legacy generic recipe approvals separate from v2 Spec approval records/applicability; no automatic conversion between them |
 | `src/revision/**` | Spec revision requests/resolutions and downstream invalidation semantics |
@@ -82,7 +117,7 @@ CLI / Pi frontend -> Core application -> domain decisions + provider-neutral por
 | `src/scheduler/**` | Ready set, claims, capacity, ownership; deterministic selection plus transactional claims through store ports |
 | `src/workspace/**` | `WorkspaceHandle`, `WorkspaceFingerprint`, provider capabilities and adapter contracts |
 | `src/storage/**` | Store ports and transactional contracts, not filesystem details in domain types |
-| `src/storage/file/**` | Eventual lock/CAS/commit/blob/recovery implementation |
+| `src/storage/file/**` | File-backed lock/CAS/commit/blob/recovery implementation; see [storage contract](storage-contract.md) |
 | `src/legacy/v1/**` | Eventual frozen v1 reader/projection; MUST NOT import v2 mutation logic |
 | `src/migration/**` | Explicit inspect/plan/import/report; provenance-preserving import through v2 application/store contracts |
 | `src/workflow/**` | Generic recipe definitions, not the Spec lifecycle model |
@@ -111,3 +146,4 @@ The existing v1 atomic replacement, mutable artifact paths, generic approvals, s
 8. [V1 compatibility](adr/008-v1-compatibility.md)
 9. [Interrupted side effects](adr/009-interrupted-side-effects.md)
 10. [Workspace and execution backends](adr/010-workspace-and-execution-backends.md)
+11. [Versioned built-in assets and behavioral profiles](adr/011-versioned-behavioral-assets.md)

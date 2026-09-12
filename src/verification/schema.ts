@@ -7,6 +7,8 @@ import { contextSnapshotReferenceSchema } from "../context/snapshot";
 import { taskDefinitionReferenceSchema } from "../execution/schema";
 import { recoveryDeclarationSchema } from "../execution/recovery";
 import { backendCapabilitySchema, executionBackendSchema, workspaceFingerprintSchema } from "../workspace/schema";
+import { behavioralPinsSchema } from "../builtins/roles";
+import { pinsPolicy, pinsProfile } from "../builtins/bindings";
 
 export const verifierReferenceSchema = z.strictObject({ id: verifierIdSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema });
 export const verifierDefinitionSchema = z.strictObject({
@@ -44,6 +46,7 @@ export const verificationEvidenceSchema = z.strictObject({
   workspace_before: workspaceFingerprintSchema, workspace_after: workspaceFingerprintSchema,
   observation: z.enum(["stable", "unstable", "unknown"]), backend: executionBackendSchema,
   policy: policyReferenceSchema, context: z.array(contextSnapshotReferenceSchema),
+  behavioral_assets: behavioralPinsSchema,
   started_at: timestampSchema, ended_at: timestampSchema, outcome: evidenceOutcomeSchema,
   outputs: z.array(blobReferenceSchema),
   requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema),
@@ -53,4 +56,5 @@ export const verificationEvidenceSchema = z.strictObject({
     z.strictObject({ kind: z.literal("agent"), implementation: profileReferenceSchema }),
   ]).optional(),
 }).refine((e) => e.snapshot.spec_id === e.spec_id && Date.parse(e.ended_at) >= Date.parse(e.started_at) &&
-  unique(e.requirements) && unique(e.acceptance_criteria) && unique(e.context.map((c) => c.id)), "invalid-evidence-binding");
+  unique(e.requirements) && unique(e.acceptance_criteria) && unique(e.context.map((c) => c.id)) &&
+  pinsProfile(e.behavioral_assets, "verification-profile", e.profile) && pinsPolicy(e.behavioral_assets, e.policy), "invalid-evidence-binding");
