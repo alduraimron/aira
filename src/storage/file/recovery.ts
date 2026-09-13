@@ -27,20 +27,24 @@ export async function inspectStorage(store: FileSpecStore): Promise<StorageInspe
   return store.fs.wrap(async () => {
     const fs = store.fs, root = fs.paths.root, result: InspectionEntry[] = [];
     const reachable = new Set<ContentHash>(), reachableCommits = new Set<string>();
-    const specRoot = join(root, "specs"), initial = await fs.entries(specRoot), pinned = new Map<string, string | null>();
+    const specRoot = join(root, "specs"), pinned = new Map<string, string | null>();
     let complete = true;
     const add = (path: string, kind: InspectionEntry["kind"], classification: InspectionEntry["classification"], error?: unknown): void => {
       result.push({ path: relative(root, path), kind, classification, ...(error ? { error: error instanceof StorageError ? error.code : "STORE_IO" } : {}) });
     };
     if (await fs.present(root, "directory")) {
       try { await fs.checkFormat(); add(join(root, "FORMAT"), "other", "reachable"); }
-      catch (error) { complete = false; add(join(root, "FORMAT"), "other", "corrupt", error); }
+      catch (error) {
+        add(join(root, "FORMAT"), "other", error instanceof StorageError && error.code === "STORE_SCHEMA_UNSUPPORTED" ? "unknown" : "corrupt", error);
+        return { complete: false, entries: result, note: "Unsupported/corrupt FORMAT: no current layout or record decoding attempted." };
+      }
       for (const name of await fs.entries(root)) if (!["FORMAT", "blobs", "specs", "locks"].includes(name)) {
         const temporary = /^\.publish-tmp-[a-f0-9]+$/.test(name);
         add(join(root, name), "other", temporary ? "temporary" : "unknown");
         if (!temporary) complete = false;
       }
     }
+    const initial = await fs.entries(specRoot);
     for (const key of initial) {
       const dir = join(specRoot, key);
       let id;

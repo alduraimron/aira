@@ -83,7 +83,9 @@ One authoritative HEAD selects an immutable committed aggregate. Lock/ownership,
 Stage 4 implements the file-backed persistence foundation described in the
 [storage contract](storage-contract.md), including exact encodings, provider-neutral
 ports, immutable blobs/commits, HEAD CAS, process locks, explicit recovery and platform
-limitations. This does not connect workers, scheduling, frontends or v1 migration.
+limitations. This does not connect workers, scheduling or frontends. Stage 5 adds the
+[frozen compatibility and pure migration contract](compatibility-migration-contract.md)
+and an [adversarial storage audit](storage-audit-stage5.md), without an import executor.
 
 Commit sequence orders every committed transaction. Spec generation changes only for Spec semantic/lifecycle mutations. Run generation governs execution bookkeeping, claims, attempts, reconciliation, and fencing. Lease renewal does not invalidate unrelated review. A run binds an exact approved Spec snapshot; superseding relevant Spec state fences old claims/results. See [ADR-003](adr/003-generation-and-fencing.md).
 
@@ -118,8 +120,9 @@ CLI / Pi frontend -> Core application -> domain decisions + provider-neutral por
 | `src/workspace/**` | `WorkspaceHandle`, `WorkspaceFingerprint`, provider capabilities and adapter contracts |
 | `src/storage/**` | Store ports and transactional contracts, not filesystem details in domain types |
 | `src/storage/file/**` | File-backed lock/CAS/commit/blob/recovery implementation; see [storage contract](storage-contract.md) |
-| `src/legacy/v1/**` | Eventual frozen v1 reader/projection; MUST NOT import v2 mutation logic |
-| `src/migration/**` | Explicit inspect/plan/import/report; provenance-preserving import through v2 application/store contracts |
+| `src/legacy/v1/**` | Frozen read-only historical schema, reader, observations and projections; MUST NOT import mutable v1 runtime or v2 mutation logic |
+| `src/migration/**` | Pure inspect/plan/preflight/archive-proposal/report; future execution through a dedicated transactional archive port, never fake SpecStore records |
+| `src/compatibility/**` | Provider-neutral format/query composition above distinct v1 and v2 read contracts; concrete file composition stays separate |
 | `src/workflow/**` | Generic recipe definitions, not the Spec lifecycle model |
 | `src/executor/**` | Recipe interpreter, not the Spec scheduler |
 | `src/agent/**` | Provider-neutral worker boundary (`AgentRuntime`); no Pi SDK in exported domain contracts |

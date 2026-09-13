@@ -8,7 +8,7 @@ V1 uses strict run schema version 1, atomic replacement of `run.json` without tr
 
 ## Decision
 
-Every valid historical v1 run MUST remain inspectable/readable. The eventual `src/legacy/v1/**` reader/projection is read-only compatibility code and MUST NOT import v2 mutation logic. Reading history cannot require regenerating current default workflows, recovering old provider credentials/config, or making the run executable under v2.
+Every valid historical v1 run MUST remain inspectable/readable. The `src/legacy/v1/**` reader/projection is read-only compatibility code and MUST NOT import v2 mutation logic. Reading history cannot require regenerating current default workflows, recovering old provider credentials/config, or making the run executable under v2.
 
 V2 is not required to safely resume an interrupted v1 run. This does not remove or alter current v1 resume/approval behavior in this change. Historical readability and eligibility for new execution are distinct contracts.
 
@@ -33,9 +33,24 @@ The corpus covers all six run statuses, approval waiting/cancellation, single/mu
 
 The strict v1 schema has no richer typed loop tree, shell-result object, or v2 approval/evidence/unknown-outcome fields. Existing flat step fields express the requested historical states, including a pending revision checkpoint, without changing the schema. Do not infer loop structure, missing earlier iterations, or exact approval subjects from those fields. Fixture workflow declarations, when supplied, are separately labeled fixture context, not newly invented persisted run metadata.
 
+## Stage-5 implementation
+
+The [compatibility/migration contract](../compatibility-migration-contract.md) defines
+the implemented frozen reader, explicit version dispatch, mixed-project read queries,
+source observations, deterministic plans, stale-source rejection and pure archive
+transaction/report port. Historical decoding is independent of mutable v1 runtime
+schema/workflow/config files. The original frozen corpus and its runtime-reader tests
+remain unchanged; new tests read those exact bytes through the dedicated boundary.
+
+`v1 history != v2 Spec`, and readable, resumable, imported and convertible are distinct.
+A mixed project preserves `.aira/runs/` alongside `.aira/state/v2/`. Each subsystem's
+errors remain isolated where its safe read boundaries permit. No file-backed archive
+executor is implemented: the existing Spec-specific publication scope is not abused
+as a history bucket. Archive proposals are not claimed imports.
+
 ## Consequences
 
-Later reader extraction must retain the accepted v1 contract, including its omissions and limitations. Existing snapshots and their hashes are not automatically refreshed when schemas change. New coverage is additive and explicitly reviewed; corruption samples do not license tightening validity beyond what v1 historically accepted.
+The frozen reader must retain the accepted v1 contract, including its omissions and limitations. Existing snapshots and their hashes are not automatically refreshed when schemas change. New coverage is additive and explicitly reviewed; corruption samples do not license tightening validity beyond what v1 historically accepted.
 
 ## Invariants
 

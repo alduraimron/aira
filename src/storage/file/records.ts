@@ -147,9 +147,33 @@ export async function validateState(store: BlobStore, state: StoreState, records
   const has = (schema: DomainRecord["schema"], id: string): boolean => records.some((r) => r.schema === schema && "id" in r && r.id === id);
   if (state.spec.approvals.some((id) => !has("aira.dev/spec-approval/v1", id)) || state.spec.waivers.some((id) => !has("aira.dev/human-waiver/v1", id)) ||
     state.spec.revisions.some((id) => !has("aira.dev/revision-request/v1", id))) fail("STORE_INTEGRITY", "Missing human decision/revision record");
+  const attempts = records.filter((r) => r.schema === "aira.dev/attempt/v1");
+  const evidence = records.filter((r) => r.schema === "aira.dev/evidence/v1");
   for (const run of state.runs) {
-    if (run.attempts.some((id) => !has("aira.dev/attempt/v1", id)) || run.current_evidence.some((e) => !has("aira.dev/evidence/v1", e.evidence)))
-      fail("STORE_INTEGRITY", "Missing run attempt/evidence");
+    for (const id of run.attempts) {
+      const attempt = attempts.find((a) => a.id === id);
+      if (!attempt || attempt.run !== run.id || !exact(attempt.snapshot, run.snapshot) || BigInt(attempt.run_generation) > BigInt(run.generation))
+        fail("STORE_INTEGRITY", "Run attempt has missing or mismatched immutable inputs");
+    }
+    for (const selected of run.current_evidence) {
+      const item = evidence.find((e) => e.id === selected.evidence);
+      if (!item || !exact(item.task, selected.task) || item.verifier.id !== selected.verifier ||
+        !run.attempts.includes(item.attempt) || !exact(item.snapshot, run.snapshot))
+        fail("STORE_INTEGRITY", "Selected evidence does not belong to this run/task/verifier");
+    }
+    for (const claim of run.claims) if (!exact(claim.snapshot, run.snapshot)) fail("STORE_INTEGRITY", "Claim snapshot differs from its run");
+    for (const task of run.tasks) if (task.claim && !run.claims.some((c) => c.id === task.claim && exact(c.task, task.task) && c.attempt === task.current_attempt))
+      fail("STORE_INTEGRITY", "Task refers to a missing or unrelated claim");
+    for (const authority of run.authorities) if (!exact(authority.snapshot, run.snapshot) ||
+      !attempts.some((a) => a.id === authority.attempt && exact(a.fence, authority.fence)))
+      fail("STORE_INTEGRITY", "Authority does not bind its exact attempt");
+  }
+  for (const attempt of attempts) if (!state.runs.some((r) => r.id === attempt.run && r.attempts.includes(attempt.id)))
+    fail("STORE_INTEGRITY", "Attempt lacks its owning run");
+  for (const item of evidence) {
+    const attempt = attempts.find((a) => a.id === item.attempt);
+    if (!attempt || !exact(item.task, attempt.task) || !exact(item.snapshot, attempt.snapshot))
+      fail("STORE_INTEGRITY", "Evidence lacks its exact attempt/task/snapshot");
   }
   for (const record of records) {
     if ("spec_id" in record && record.spec_id !== state.spec.id) fail("STORE_INTEGRITY", "Cross-Spec structured record");

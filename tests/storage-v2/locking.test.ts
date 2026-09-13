@@ -21,7 +21,8 @@ test("live PID lock is never stolen, even with ancient acquisition time", async 
   const owner = await x.store.locks.owner(lock.spec);
   await writeFile(path, canonicalBytes({ ...owner, acquired_at: "2000-01-01T00:00:00.000Z" }));
   await code(x.store.locks.recover(lock.spec), "STORE_LOCKED"); await code(x.store.commit(mutation(x.result)), "STORE_LOCKED");
-  await x.store.locks.release(lock);
+  // A same-token metadata rewrite is not the originally acquired ownership.
+  await code(x.store.locks.release(lock), "STORE_LOCK_OWNERSHIP");
 });
 test("a dead local process owner can be recovered explicitly", async () => {
   const x = await setup(); await launch(x.root, "lock-die", x.result.spec_id).done();

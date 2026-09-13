@@ -64,6 +64,8 @@ export function checkEvolution(t: StoreTransaction, previous: StoreState | null,
     const old = previous.runs.find((r) => r.id === run.id), changes = changed.runs.includes(run.id);
     if (!old) {
       if (!changes || run.generation !== "0" || run.commit_sequence !== sequence) fail("STORE_CONFLICT", "New run must explicitly establish generation zero at its publication sequence");
+    } else if (!exact(run.snapshot, old.snapshot)) {
+      fail("STORE_INTEGRITY", "Run identity cannot be rebound to different approved inputs");
     } else if (changes) {
       if (BigInt(run.generation) !== BigInt(old.generation) + 1n || run.commit_sequence !== sequence) fail("STORE_CONFLICT", "Invalid RunGeneration advancement");
     } else if (!exact(run, old)) fail("STORE_CONFLICT", "Run changed without generation advancement");

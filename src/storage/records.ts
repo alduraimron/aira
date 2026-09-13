@@ -84,7 +84,12 @@ export function rejectUnknownVersions(value: unknown): void {
   if (!value || typeof value !== "object") return;
   if ("schema" in value && typeof value.schema === "string" && value.schema.startsWith("aira.dev/") && !value.schema.endsWith("/v1"))
     fail("STORE_SCHEMA_UNSUPPORTED", `Unsupported schema: ${value.schema}`);
-  for (const child of Object.values(value)) rejectUnknownVersions(child);
+  const object = value as Record<string, unknown>;
+  for (const [key, child] of Object.entries(object)) {
+    if ((object.schema === "aira.dev/workspace-handle/v1" && key === "provider_data") ||
+      (object.kind === "custom" && (("repository_identity" in object && key === "components") || ("contract" in object && key === "configuration")))) continue;
+    rejectUnknownVersions(child);
+  }
 }
 export function parseRecord(value: unknown, code: StorageErrorCode = "STORE_INTEGRITY"): DomainRecord {
   if (!value || typeof value !== "object" || !("schema" in value) || typeof value.schema !== "string") fail(code, "Record schema is missing");

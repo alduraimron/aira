@@ -1,4 +1,4 @@
-import { mkdir, rename, unlink, rmdir, readFile, readlink } from "node:fs/promises";
+import { mkdir, rename, unlink, rmdir, readFile, readlink, lstat } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { hostname } from "node:os";
 import { performance } from "node:perf_hooks";
@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { SpecId } from "../../spec/domain/ids";
 import { timestampSchema, nonBlankSchema, safeUnsignedSchema } from "../../spec/domain/primitives";
 import { errno, fail } from "../errors";
-import { canonicalBytes, decodeCanonical } from "./canonical-json";
+import { canonicalBytes, canonicalJSON, decodeCanonical } from "./canonical-json";
 import { DurableFS } from "./fsync";
 
 export const lockMetadataSchema = z.strictObject({
@@ -16,8 +16,23 @@ export const lockMetadataSchema = z.strictObject({
 });
 export type LockMetadata = z.infer<typeof lockMetadataSchema>;
 export type LockHandle = { readonly spec: SpecId; readonly owner: string };
+type LockIdentity = { directory: string; file: string; metadata: string };
 export class SpecLocks {
+  private readonly held = new WeakMap<LockHandle, LockIdentity>();
   constructor(readonly fs: DurableFS) {}
+  private async identity(path: string): Promise<LockIdentity> {
+    await this.fs.check(path, "directory");
+    const directory = await lstat(path, { bigint: true }), file = await lstat(join(path, "owner.json"), { bigint: true });
+    const metadata = await this.ownerAt(path);
+    if (!metadata) fail("STORE_LOCK_OWNERSHIP", "Lock disappeared");
+    const after = await lstat(path, { bigint: true }), owner = await lstat(join(path, "owner.json"), { bigint: true });
+    if (directory.dev !== after.dev || directory.ino !== after.ino || file.dev !== owner.dev || file.ino !== owner.ino)
+      fail("STORE_LOCK_OWNERSHIP", "Lock substituted during observation");
+    return { directory: `${directory.dev}:${directory.ino}`, file: `${file.dev}:${file.ino}`, metadata: canonicalJSON(metadata) };
+  }
+  private async assertIdentity(path: string, expected: LockIdentity): Promise<void> {
+    if (canonicalJSON(await this.identity(path)) !== canonicalJSON(expected)) fail("STORE_LOCK_OWNERSHIP", "Lock inode or complete owner metadata changed");
+  }
   async owner(spec: SpecId): Promise<LockMetadata | null> { return this.ownerAt(this.fs.paths.lock(spec)); }
   private async ownerAt(path: string): Promise<LockMetadata | null> {
     return this.fs.wrap(async () => {
@@ -38,7 +53,6 @@ export class SpecLocks {
         if (/^[a-f0-9-]{36}$/.test(boot) && /^pid:\[\d+\]$/.test(namespace)) return `linux:${boot}:${namespace}`;
       } catch { /* No portable proof of a shared process table: recovery stays busy. */ }
     }
-    if (process.platform === "darwin") return "darwin:host-process-table";
     return null;
   }
   private async dead(owner: LockMetadata): Promise<boolean> {
@@ -47,7 +61,9 @@ export class SpecLocks {
     try { process.kill(owner.pid, 0); return false; } catch (error) { return errno(error, "ESRCH"); }
   }
   async assertOwner(handle: LockHandle): Promise<void> {
-    if ((await this.owner(handle.spec))?.owner !== handle.owner) fail("STORE_LOCK_OWNERSHIP", "Lock ownership changed");
+    const expected = this.held.get(handle);
+    if (!expected || (await this.owner(handle.spec))?.owner !== handle.owner) fail("STORE_LOCK_OWNERSHIP", "Lock ownership changed");
+    await this.assertIdentity(this.fs.paths.lock(handle.spec), expected);
   }
   /** Explicit recovery. Exclusive nested cleaner directories serialize reclamation.
    * A dead, fully identified cleaner can itself be fenced by a nested cleaner. Any
@@ -55,12 +71,15 @@ export class SpecLocks {
    */
   async recover(spec: SpecId): Promise<boolean> {
     return this.fs.wrap(async () => {
+      const path = this.fs.paths.lock(spec);
       const before = await this.owner(spec);
       if (!before) return false;
       await this.fs.checkFormat();
+      await this.fs.mutationSupport(path);
       if (!await this.dead(before)) fail("STORE_LOCKED", "Lock owner is alive or cannot safely be shown dead");
-      const path = this.fs.paths.lock(spec);
-      const ancestors: { path: string; owner: LockMetadata }[] = [{ path, owner: before }];
+      const initial = await this.identity(path);
+      if (initial.metadata !== canonicalJSON(before)) fail("STORE_LOCK_OWNERSHIP", "Owner changed before recovery");
+      const ancestors: { path: string; owner: LockMetadata; identity: LockIdentity }[] = [{ path, owner: before, identity: initial }];
       let parent = path;
       for (let depth = 0; depth < 32; depth++) {
         const marker = join(parent, "recovery");
@@ -70,18 +89,26 @@ export class SpecLocks {
           if (!errno(error, "EEXIST")) throw error;
           const cleaner = await this.ownerAt(marker);
           if (!cleaner || !await this.dead(cleaner)) fail("STORE_LOCKED", "Cleaner is active or uncertain");
-          ancestors.push({ path: marker, owner: cleaner }); parent = marker; continue;
+          const identity = await this.identity(marker);
+          if (identity.metadata !== canonicalJSON(cleaner)) fail("STORE_LOCK_OWNERSHIP", "Cleaner changed");
+          ancestors.push({ path: marker, owner: cleaner, identity }); parent = marker; continue;
         }
+        const created = await lstat(marker, { bigint: true });
         const diagnostic = lockMetadataSchema.parse({ schema: "aira.dev/store-lock/v1", owner: this.fs.token(), pid: process.pid,
           hostname: hostname(), acquired_at: this.fs.now(), process_scope: await this.processScope() });
         await this.fs.immutable(join(marker, "owner.json"), canonicalBytes(diagnostic));
+        const cleanerIdentity = await this.identity(marker);
+        if (cleanerIdentity.directory !== `${created.dev}:${created.ino}` || cleanerIdentity.metadata !== canonicalJSON(diagnostic))
+          fail("STORE_LOCK_OWNERSHIP", "Cleaner substituted during acquisition");
         for (const ancestor of ancestors) {
+          await this.assertIdentity(ancestor.path, ancestor.identity);
           const current = await this.ownerAt(ancestor.path);
           if (!current || current.owner !== ancestor.owner.owner || !await this.dead(current))
             fail("STORE_LOCKED", "Ownership changed during recovery; inspect cleaner marker");
         }
-        if ((await this.ownerAt(marker))?.owner !== diagnostic.owner) fail("STORE_LOCK_OWNERSHIP", "Cleaner ownership changed");
+        await this.assertIdentity(marker, cleanerIdentity);
         const tomb = join(dirname(path), `.stale-lock-${this.fs.token()}`);
+        if (await this.fs.present(tomb)) fail("STORE_LOCK_OWNERSHIP", "Recovery tombstone collision");
         await rename(path, tomb); await this.fs.syncDir(dirname(path));
         // Retain all dead owner/cleaner diagnostics. This tombstone is not authority.
         return true;
@@ -91,8 +118,11 @@ export class SpecLocks {
   }
   async acquire(spec: SpecId): Promise<LockHandle> {
     return this.fs.wrap(async () => {
+      const path = this.fs.paths.lock(spec); // Validate identity before any filesystem initialization.
+      const metadata = lockMetadataSchema.parse({ schema: "aira.dev/store-lock/v1", owner: this.fs.token(), pid: process.pid,
+        hostname: hostname(), acquired_at: this.fs.now(), process_scope: await this.processScope() });
       await this.fs.prepare(); await this.fs.ensureDir(this.fs.paths.locks());
-      const path = this.fs.paths.lock(spec), deadline = performance.now() + (this.fs.options.lockTimeoutMs ?? 5000);
+      const deadline = performance.now() + (this.fs.options.lockTimeoutMs ?? 5000);
       for (;;) {
         try { await mkdir(path, { mode: 0o700 }); break; }
         catch (error) {
@@ -103,11 +133,15 @@ export class SpecLocks {
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
       }
-      const metadata = lockMetadataSchema.parse({ schema: "aira.dev/store-lock/v1", owner: this.fs.token(), pid: process.pid,
-        hostname: hostname(), acquired_at: this.fs.now(), process_scope: await this.processScope() });
+      const created = await lstat(path, { bigint: true });
       await this.fs.immutable(join(path, "owner.json"), canonicalBytes(metadata));
       await this.fs.syncDir(dirname(path));
-      return { spec, owner: metadata.owner };
+      const handle = Object.freeze({ spec, owner: metadata.owner });
+      const identity = await this.identity(path);
+      if (identity.directory !== `${created.dev}:${created.ino}` || identity.metadata !== canonicalJSON(metadata))
+        fail("STORE_LOCK_OWNERSHIP", "Owner/directory changed during acquisition");
+      this.held.set(handle, identity);
+      return handle;
     });
   }
   async release(handle: LockHandle): Promise<void> {
@@ -118,6 +152,8 @@ export class SpecLocks {
       if (entries.length !== 1 || entries[0] !== "owner.json") fail("STORE_LOCKED", "Unexpected lock contents; refusing release");
       // Rename ownership away atomically. A release crash cannot leave an ownerless public lock.
       const tomb = join(dirname(path), `.released-lock-${this.fs.token()}`);
+      await this.assertOwner(handle);
+      if (await this.fs.present(tomb)) fail("STORE_LOCK_OWNERSHIP", "Release tombstone collision");
       await rename(path, tomb); await this.fs.syncDir(dirname(path));
       await unlink(join(tomb, "owner.json")); await rmdir(tomb); await this.fs.syncDir(dirname(path));
     });

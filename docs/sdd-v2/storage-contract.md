@@ -1,6 +1,8 @@
 # SDD v2 file persistence contract
 
-Status: implemented in stage 4. This specifies the concrete encoding, layout and
+Status: implemented in stage 4, adversarially hardened in stage 5. See the
+[stage-5 audit](storage-audit-stage5.md) and separate
+[compatibility/migration contract](compatibility-migration-contract.md). This specifies the concrete encoding, layout and
 publication protocol selected under ADR-002/003. It does not supersede lifecycle,
 behavioral-asset, execution, capability, evidence or v1 compatibility invariants.
 The pure [domain contract](domain-contract.md) remains the structured data model.
@@ -57,6 +59,9 @@ Spec keys, and the immutable-link/atomic-HEAD publication strategy. Missing or
 unsupported FORMAT on existing state is an error, never permission to migrate.
 An interrupted first initializer may leave only recognizable temporaries before
 FORMAT exists. Creation never infers Spec existence from directories or commits.
+A strict provider-neutral FORMAT schema freezes these exact fields. Conflicting
+control-root FORMAT, sibling state-version roots and unknown v2 namespaces fail
+mutation closed rather than silently choosing the most convenient marker.
 
 Spec keys are centrally validated and injectively encoded, not raw user strings.
 The encoding is reversible and case-insensitive-filesystem safe. Digest paths accept
@@ -213,7 +218,13 @@ not stolen. After 32 interrupted-cleaner levels, recovery is conservative busy.
 Recovery atomically renames the old directory to a unique stale diagnostic tombstone;
 a fresh acquisition must still win its own atomic mkdir.
 
-Release checks the token and expected lock contents, renames the owned directory out
+Ownership handles pin the created directory inode, owner-file inode and complete
+canonical owner metadata, not just its token. Acquisition validates identities before
+filesystem initialization. Recovery rechecks those complete identities for every
+ancestor; replacing metadata while retaining a token is not continued ownership.
+The writer rechecks ownership after HEAD temporary I/O, immediately before rename.
+
+Release checks the pinned identity, token and expected lock contents, renames the owned directory out
 of the public lock name, fsyncs the parent, then removes its own release tombstone.
 A release crash does not leave an intentionally ownerless public lock. No process
 may release a different token. Diagnostic locks are not Spec state or a lease clock.
@@ -247,7 +258,9 @@ HEAD directory fsync, and before lock release. No production environment-variabl
 corruption switches exist. Fsync/I/O failures are surfaced, not downgraded to success.
 
 Default `loadSpec(..., "full")` checks current HEAD/commit, its immediate parent
-relationship, complete structured record closure, and raw required blob integrity.
+relationship, complete structured record closure, and raw required blob integrity. Run identities cannot be rebound to different
+approved snapshots. Attempt/evidence/claim/task/authority references must bind their
+owning run and exact task/snapshot/fence identities, not merely exist in the catalog.
 `"current"` still verifies current structured records but may defer raw content/output
 hashing for inspection. `"deep"` and verifySpecHistory explicitly traverse the entire
 pinned HEAD chain, checking genesis, hashes, exact parent/sequence agreement, unique
@@ -306,10 +319,11 @@ storage. The tests do not disable durability; they avoid volatile `/tmp` mounts.
 Required primitives are
 exclusive file/directory creation, regular-file no-follow opens, exclusive hard links,
 atomic same-directory replacement, file fsync and directory fsync. Missing primitives
-fail with unsupported-storage errors. Windows is explicitly unsupported by this
-backend rather than silently offering weaker replacement/directory durability.
-Darwin/POSIX primitives are usable where available but have not been validated by this
-Linux test run. Platforms without a provable process-table scope cannot automatically
+fail with unsupported-storage errors. Mutation is explicitly **Linux-only**, including when internal capability probes
+are supplied. Windows/macOS mutation fails with STORE_DURABILITY_UNSUPPORTED rather
+than attempting uncertified replacement/directory durability. The filesystem type is
+checked on existing destination ancestors too, so a nested mount does not inherit a
+project root's capability result. Platforms without a provable process-table scope cannot automatically
 recover dead owners. Known network/FUSE filesystem types are rejected; unrecognized
 network, distributed, synchronizing or wrapper storage is not certified by capability
 detection.

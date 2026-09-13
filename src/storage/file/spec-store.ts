@@ -177,7 +177,7 @@ export class FileSpecStore implements SpecStore {
         await this.commits.publish(commit);
         await this.fs.point("after-commit-publication");
         await this.locks.assertOwner(lock);
-        await this.fs.replaceHead(this.fs.paths.head(t.spec_id), canonicalBytes(headOf(commit)));
+        await this.fs.replaceHead(this.fs.paths.head(t.spec_id), canonicalBytes(headOf(commit)), () => this.locks.assertOwner(lock));
         return this.result(commit, false);
       } finally {
         try { await this.fs.point("before-lock-release"); } finally { await this.locks.release(lock); }

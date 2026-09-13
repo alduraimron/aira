@@ -6,10 +6,8 @@ import { errno, fail, io, StorageError } from "../errors";
 import { StorePaths } from "./paths";
 import { canonicalBytes, canonicalJSON, decodeCanonical } from "./canonical-json";
 
-export const fileStoreFormat = {
-  schema: "aira.dev/file-store/v1", store: "v2", canonical_json: "aira.dev/canonical-json/v1",
-  hash: "sha256", spec_keys: "hex-utf8/v1", publication: "immutable-link-atomic-head/v1",
-} as const;
+import { fileStoreFormat } from "../format";
+export { fileStoreFormat } from "../format";
 
 export type Failpoint = "after-lock-acquisition" | "after-blob-publication" | "after-commit-publication" |
   "after-head-temp-write" | "after-head-temp-fsync" | "before-head-rename" | "after-head-rename" |
@@ -66,6 +64,7 @@ export class DurableFS {
   async ensureDir(path: string): Promise<void> {
     this.paths.assertInside(path);
     if (await this.present(path, "directory")) {
+      await this.mutationSupport(path);
       await this.syncDir(path);
       if (path !== this.paths.project) await this.ensureDir(dirname(path));
       return;
@@ -75,17 +74,29 @@ export class DurableFS {
     try { await mkdir(path, { mode: 0o700 }); } catch (error) { if (!errno(error, "EEXIST")) throw error; }
     await this.check(path, "directory"); await this.syncDir(path); await this.syncDir(dirname(path));
   }
-  async prepare(): Promise<void> {
-    const supported = process.platform !== "win32" && !!constants.O_NOFOLLOW && !!constants.O_DIRECTORY;
+  /** Called on each actual destination ancestor, not just the project mount. */
+  async mutationSupport(path: string): Promise<void> {
+    if (process.platform !== "linux") fail("STORE_DURABILITY_UNSUPPORTED", "Mutating file storage is supported only on Linux");
+    const supported = !!constants.O_NOFOLLOW && !!constants.O_DIRECTORY;
     const c = this.options.capabilities?.() ?? { noFollow: supported, directorySync: supported, atomicReplace: supported, exclusiveLink: supported };
-    if (!Object.values(c).every(Boolean)) fail("STORE_DURABILITY_UNSUPPORTED", "Required no-follow, fsync, link and atomic replacement primitives unavailable");
-    await this.check(this.paths.project, "directory");
+    if (!supported || c.noFollow !== true || c.directorySync !== true || c.atomicReplace !== true || c.exclusiveLink !== true)
+      fail("STORE_DURABILITY_UNSUPPORTED", "Required no-follow, fsync, link and atomic replacement primitives unavailable");
+    await this.check(path, "directory");
     // Known remote filesystem types are rejected, not advertised as local locks.
-    const info = await statfs(this.paths.project);
+    const info = await statfs(path);
     const type = info.type >>> 0;
     if ([0x01021994, 0x858458f6].includes(type)) fail("STORE_DURABILITY_UNSUPPORTED", "Volatile tmpfs/ramfs cannot provide durable control storage");
     if ([0x6969, 0xff534d42, 0xfe534d42, 0x517b, 0x01021997, 0x00c36400, 0x5346414f, 0x65735546].includes(type))
       fail("STORE_DURABILITY_UNSUPPORTED", "Network/FUSE filesystems are unsupported");
+  }
+  async prepare(): Promise<void> {
+    await this.mutationSupport(this.paths.project);
+    if (await this.present(join(this.paths.project, ".aira", "FORMAT")))
+      fail("STORE_SCHEMA_UNSUPPORTED", "Conflicting control-root FORMAT requires explicit inspection");
+    if ((await this.entries(dirname(this.paths.root))).some((name) => name !== "v2"))
+      fail("STORE_SCHEMA_UNSUPPORTED", "Conflicting state version roots require explicit inspection");
+    if ((await this.entries(this.paths.root)).some((name) => !["FORMAT", "blobs", "specs", "locks"].includes(name) && !/^\.publish-tmp-[a-f0-9]{32,64}$/.test(name)))
+      fail("STORE_SCHEMA_UNSUPPORTED", "Unknown v2 control namespace requires explicit inspection");
     await this.ensureDir(this.paths.root);
     const format = join(this.paths.root, "FORMAT");
     if (await this.present(format)) await this.checkFormat();
@@ -111,13 +122,23 @@ export class DurableFS {
     try {
       const before = await h.stat(), name = await lstat(path);
       if (!before.isFile() || before.dev !== name.dev || before.ino !== name.ino) fail("STORE_PATH_UNSAFE", "File substitution detected");
-      return new Uint8Array(await h.readFile());
+      const bytes = new Uint8Array(await h.readFile());
+      await this.check(path, "file");
+      const after = await lstat(path), final = await h.stat();
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== final.size ||
+        before.mtimeMs !== final.mtimeMs)
+        fail("STORE_PATH_UNSAFE", "File changed during read");
+      return bytes;
     } finally { await h.close(); }
   }
   async syncFile(path: string): Promise<void> {
     await this.check(path, "file");
-    const h = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try { await h.sync(); } finally { await h.close(); }
+    const h = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const inode = await h.stat(), name = await lstat(path);
+      if (!inode.isFile() || inode.dev !== name.dev || inode.ino !== name.ino) fail("STORE_PATH_UNSAFE", "Sync target substituted");
+      await h.sync();
+    } finally { await h.close(); }
     await this.ensureDir(dirname(path));
   }
   async temp(path: string, bytes: Uint8Array, head = false): Promise<string> {
@@ -146,19 +167,19 @@ export class DurableFS {
         }
         const existing = await this.read(path);
         if (!Buffer.from(existing).equals(Buffer.from(bytes))) fail("STORE_INTEGRITY", "Immutable identity collision");
-        const h = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try { await h.sync(); } finally { await h.close(); }
+        await this.syncFile(path);
       }
       await this.syncDir(dirname(path));
     } finally { await unlink(temp); await this.syncDir(dirname(path)); }
   }
-  async replaceHead(path: string, bytes: Uint8Array): Promise<void> {
+  async replaceHead(path: string, bytes: Uint8Array, assertOwner: () => Promise<void> = async () => {}): Promise<void> {
     await this.ensureDir(dirname(path));
     if (await this.present(path)) await this.check(path, "file");
     const temp = await this.temp(dirname(path), bytes, true);
     await this.point("before-head-rename");
     await this.check(dirname(path), "directory");
     if (await this.present(path)) await this.check(path, "file");
+    await assertOwner(); // Recheck after temp I/O and failpoint barriers, immediately before publication.
     await rename(temp, path); // Never unlink HEAD first.
     await this.point("after-head-rename");
     await this.syncDir(dirname(path));
