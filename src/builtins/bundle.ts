@@ -8,7 +8,7 @@ import { assetKey, builtinBundleReferenceSchema } from "./identity";
 import { behavioralAssetSelectionSchema } from "./roles";
 
 export const builtinBundleManifestSchema = z.strictObject({
-  schema: z.literal("aira.dev/builtin-bundle/v1"), identity: builtinBundleReferenceSchema,
+  schema: z.literal("aira.dev/builtin-bundle/v2"), identity: builtinBundleReferenceSchema,
   distribution_version: nonBlankSchema, compatibility: assetCompatibilitySchema,
   assets: z.array(behavioralAssetReferenceSchema).min(1),
   defaults: z.array(behavioralAssetSelectionSchema),

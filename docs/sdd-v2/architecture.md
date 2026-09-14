@@ -11,7 +11,7 @@ This directory defines the complete v2 architecture, even where implementation i
 Aira v2 is a deterministic local Spec-Driven Development control plane:
 
 ```text
-Spec -> Requirements -> Design -> Tasks -> Execution -> Verification -> Completion
+Intent -> Product Definition -> Requirements -> System Architecture -> Program Design -> Vertical Slice Plan -> Task DAG -> Execution -> Verification -> Completion
 ```
 
 This is the primary domain hierarchy, not a requirement that authoring always starts with requirements. Pi is a reasoning/execution adapter. Human users retain authority over approval and exceptional capability escalation. Deterministic domain rules, not model assertions, decide applicability, readiness, and completion.
@@ -24,8 +24,8 @@ These are required representational capabilities from the first v2 schema, not o
 
 | Area | Required representation |
 | --- | --- |
-| Spec lifecycle | Requirements-first, design-first, and quick modes; intent; current/proposed/superseded applicability; completion state |
-| Canonical artifacts | Requirements, design, structured tasks; immutable revision identities including content hashes; stable requirement, acceptance-criterion, and design-decision IDs; stable task identities with revisioned definitions |
+| Spec lifecycle | Requirements-first, architecture-first, and quick modes; intent; current/proposed/superseded applicability; completion state |
+| Canonical artifacts | Product Definition, Requirements, System Architecture, Program Design, Vertical Slice Plan, Task DAG; distinct schemas and immutable revision/hash identities; stable O/SC/R/AC/A/PD/S/T/V IDs and tombstones |
 | Behavioral assets | Immutable versioned Aira/project asset identities, content hashes, provenance, compatibility, bundle manifests, closed role selections, kind/mode profiles, exact pins and phase-specific Spec/run/attempt attribution; never mutable filenames/default aliases |
 | Relationships | Typed lineage (`derived_from` distinct from `validated_against`); traceability; downstream invalidation and recorded revalidation |
 | Human decisions | Exact-bound approvals, revision requests/feedback/resolutions, policy-authorized waivers, actor and channel provenance |
@@ -41,11 +41,11 @@ An immutable artifact identity identifies a particular revision and its exact co
 
 ## Lifecycle and safety
 
-- Requirements-first derives design from current requirements. Design-first proposes and approves design, derives and approves requirements using intent plus design, then analyzes that same design against requirements. Unchanged consistent design needs no duplicate content revision; changed design needs a new approved revision. Tasks become current only with mutually consistent requirements and applicable design. See [ADR-004](adr/004-design-first-provenance.md).
-- Quick mode creates the same canonical requirements, design, and structured tasks and performs the same required analyses/validation. It removes intermediate human gates, not quality or traceability obligations. One final explicit human decision may approve the exact revision/hash set plus observed Spec generation in one transaction, recording individual artifact applicability.
+- Product intent precedes all authoring. Requirements-first derives Architecture from current Requirements, then Program Design, Slices and Tasks. Architecture-first proposes Architecture from Product before Requirements. See the normative [planning model](planning-model.md) and [ADR-012](adr/012-canonical-planning-ontology.md). Architecture-first proposes and approves architecture, derives and approves Requirements using Product plus Architecture, then analyzes that same architecture against requirements. Unchanged consistent architecture needs no duplicate content revision; changed architecture needs a new approved revision. Tasks become current only with mutually consistent requirements and applicable architecture. See [ADR-004](adr/004-design-first-provenance.md).
+- Quick mode creates the same canonical Product, Requirements, Architecture, Program Design, Slice Plan, and Task Plan and performs the same required analyses/validation. It removes intermediate human gates, not quality or traceability obligations. One final explicit human decision may approve the exact revision/hash set plus observed Spec generation in one transaction, recording individual artifact applicability.
 - Revision feedback, findings, waivers, and revalidation are first-class Spec state. A relevant upstream mutation invalidates affected downstream approval, task, run, evidence, and completion applicability without deleting history. Revalidation is explicit and exact-bound, not silent reuse by filename.
-- Traceability supports `Requirement -> Acceptance Criteria -> Design Decision -> Task -> Verifier -> Evidence`. A MUST requirement cannot be structurally complete with uncovered required obligations unless policy permits and records an explicit human waiver. Completion also requires current applicable evidence and satisfied completion policies.
-- Tasks form a DAG. A dependency means predecessor domain state `completed`, which requires its configured completion policy, not worker success. Readiness operates on identities/sets, never a persisted sequential cursor. Initial execution policy is `max_parallel = 1`; definitions remain parallel-ready. See [ADR-005](adr/005-task-dag-semantics.md).
+- Traceability supports `Product Outcome -> Success Criterion -> Requirement -> Acceptance Criterion -> Architecture Decision -> Program Design Decision -> Slice -> Task -> Verifier -> Evidence`. A MUST requirement cannot be structurally complete with uncovered required obligations unless policy permits and records an explicit human waiver. Completion also requires current applicable evidence and satisfied completion policies.
+- Slices and Tasks form separate DAGs. Every executable Task has exactly one Slice owner. Cross-Slice Task prerequisites follow the transitive Slice order. Slice completion requires Task policies and current passing Slice verification/checkpoints, never worker success. Tasks form a DAG. A dependency means predecessor domain state `completed`, which requires its configured completion policy, not worker success. Readiness operates on identities/sets, never a persisted sequential cursor. Initial execution policy is `max_parallel = 1`; definitions remain parallel-ready. See [ADR-005](adr/005-task-dag-semantics.md).
 - Approval/preparation binds exact artifacts and observed Spec generation. Human provenance requires at least `{ kind: human, id: local }` and channel (`cli`, `pi`) where known; no cloud identity is required. A worker, model, or arbitrary Core caller is not automatically a human. See [ADR-003](adr/003-generation-and-fencing.md).
 
 ## Versioned behavioral assets and release quality
@@ -64,10 +64,10 @@ Profiles cannot override lifecycle or backend enforcement invariants. Unknown, m
 incompatible or hash-mismatched pinned revisions fail closed without fallback.
 
 Specs preserve phase-specific immutable profile snapshots in output lineage, including
-all six generation/analysis activities. Approved run snapshots, attempts, context and
+all twelve generation/analysis activities. Approved run snapshots, attempts, context and
 evidence preserve exact behavioral references. Future default changes never rewrite
 existing pins. Profile adoption is a controlled Spec semantic mutation subject to existing
-generation, invalidation and fencing rules. Revalidating unchanged design-first content
+generation, invalidation and fencing rules. Revalidating unchanged architecture-first content
 may use a new analysis profile without changing its original authoring snapshot.
 
 Production-grade content, differentiated kinds/modes, independent content tests,
@@ -142,7 +142,7 @@ The existing v1 atomic replacement, mutable artifact paths, generic approvals, s
 1. [Spec as primary domain](adr/001-spec-as-primary-domain.md)
 2. [Transactional file store](adr/002-transactional-file-store.md)
 3. [Generation and fencing](adr/003-generation-and-fencing.md)
-4. [Design-first provenance](adr/004-design-first-provenance.md)
+4. [Architecture-first provenance](adr/004-design-first-provenance.md)
 5. [Task DAG semantics](adr/005-task-dag-semantics.md)
 6. [Capability enforcement](adr/006-capability-enforcement.md)
 7. [Verification applicability](adr/007-verification-applicability.md)
@@ -150,3 +150,4 @@ The existing v1 atomic replacement, mutable artifact paths, generic approvals, s
 9. [Interrupted side effects](adr/009-interrupted-side-effects.md)
 10. [Workspace and execution backends](adr/010-workspace-and-execution-backends.md)
 11. [Versioned built-in assets and behavioral profiles](adr/011-versioned-behavioral-assets.md)
+12. [Canonical planning ontology and explicit pre-release schema retirement](adr/012-canonical-planning-ontology.md)

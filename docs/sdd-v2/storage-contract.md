@@ -1,6 +1,10 @@
 # SDD v2 file persistence contract
 
-Status: implemented in stage 4, adversarially hardened in stage 5. See the
+Status: implemented in stage 4, adversarially hardened in stage 5. Stage 05B extends
+only domain dispatch/reference validation for the [planning model](planning-model.md).
+Affected domain schemas advance versions; old generic-design state fails closed as
+specified in [ADR-012](adr/012-canonical-planning-ontology.md). No storage protocol or
+FORMAT change is introduced. See the
 [stage-5 audit](storage-audit-stage5.md) and separate
 [compatibility/migration contract](compatibility-migration-contract.md). This specifies the concrete encoding, layout and
 publication protocol selected under ADR-002/003. It does not supersede lifecycle,
@@ -85,8 +89,9 @@ duplicate JSON keys, extra keys and noncanonical alternative encodings fail clos
 Explicit domain custom JSON maps are opaque data, not additional schema/reference
 lookup sites merely because they contain keys named `schema`, `id` or `hash`.
 
-The record registry dispatches existing strict domain schemas rather than copying
-selected fields into a reduced storage model. Requirements, design, DAG tasks,
+The record registry dispatches explicit supported strict domain schemas rather than copying
+selected fields into a reduced storage model. Product, Requirements, Architecture,
+Program Design, Slice Plans and state, DAG tasks,
 analyses/findings, lineage, human decisions, revision feedback/resolution, policies,
 context snapshots, attempts, evidence, workspaces, behavioral assets/bundles/profiles
 and transaction-precondition records retain their full contracts. Spec and execution
@@ -105,6 +110,24 @@ Artifact subject `lineage_hash` covers `{created, lineage, behavioral_profile?}`
 validation/applicability records never enter that immutable authoring-provenance hash.
 Nested task/verifier definition bodies likewise exclude their identity envelope.
 These are distinct hash subjects, all using the single existing SHA-256 representation.
+
+## Stage-05B planning integrity
+
+All six artifact kinds have distinct content schemas. `planningContentContracts` maps
+artifact kinds to exact supported schema identifiers rather than constructing a `/v1`
+identifier by convention. The store checks the canonical typed body hash/size and full
+reference closure, including exact provenance-bound R/AC/A/PD/S inputs, reciprocal Task
+ownership, separate Slice DAG ordering, semantic finding targets and current identity
+registry/tombstones. Scope observations are measured from exact `planningEntities` hash
+subjects, never trusted asserted entity digests. Slice states bind their run's exact
+Slice Plan snapshot; selected Slice evidence must belong to that run/Slice/verifier.
+Lifecycle approval/readiness decisions still belong to the pure domain/Core, not storage.
+
+Old `aira.dev/design/v1` and affected old enclosing domain schemas are not decoded as
+current canonical state. There is no compatibility decoder/converter for pre-release
+v2 development stores. Their bytes/HEAD are not rewritten. Frozen v1 and its explicit
+migration contracts are separate and unaffected. Blob/commit/HEAD encodings, ownership,
+CAS, generations, fsync barriers and crash recovery below are unchanged.
 
 ## BlobStore
 

@@ -61,7 +61,7 @@ describe("INV-EXEC-003/004: unknown side effects and conservative retry", () => 
 describe("INV-GEN-003/EXEC-001: future parallel ownership contracts, without a scheduler", () => {
   test("claims bind task, attempt, owner, monotonic fence, exact approved snapshot and lease", () => {
     const f = fixture();
-    const record = { schema: "aira.dev/task-claim/v1", id: "claim_one", task: f.attempt.task, run: f.attempt.run, attempt: f.attempt.id,
+    const record = { schema: "aira.dev/task-claim/v2", id: "claim_one", task: f.attempt.task, run: f.attempt.run, attempt: f.attempt.id,
       owner: f.attempt.fence.owner, generation: "3", fence: f.attempt.fence, snapshot: f.attempt.snapshot, lease: { issued_at: f.attempt.started_at, expires_at: observed }, status: "active" };
     expect(claimRecordSchema.safeParse(record).success).toBe(true);
     expect(claimRecordSchema.safeParse({ ...record, owner: "other-owner" }).success).toBe(false);

@@ -10,9 +10,15 @@ import { validateSpecBehavioralBindings } from "../../spec/domain/behavior";
 import { fail, errno } from "../errors";
 import { canonicalBytes, canonicalJSON, decodeCanonical, hashCanonical } from "./canonical-json";
 import { currentLineageValidity } from "../../spec/domain/lineage";
-import { identityRegistrySchema, validateIdentityEvolution } from "../../spec/domain/ids";
+import { identityRegistrySchema, stableIdentitySchema, validateIdentityChange, validateIdentityEvolution } from "../../spec/domain/ids";
 import { validateRevisionResolution } from "../../revision/policy";
 import { validateTaskGraph } from "../../tasks/graph";
+import { planningContentContracts } from "../../spec/domain/planning-kinds";
+import { planningEntities, validateFindingTargets, type PlanningDocument } from "../../spec/domain/planning-integrity";
+import { validateArchitecture } from "../../spec/domain/architecture";
+import { validateRequirementsProduct } from "../../spec/domain/requirements";
+import { validateProgramDesign } from "../../spec/domain/program-design";
+import { validateSliceReferences, validateTaskSliceConsistency } from "../../spec/domain/slices";
 
 export function walk(value: unknown, visit: (object: Record<string, unknown>) => void): void {
   if (!value || typeof value !== "object") return;
@@ -52,8 +58,8 @@ export function logicalRecordKey(record: DomainRecord): string | null {
     return identity.revision === undefined ? null : `${record.schema}:${identity.id}:${identity.revision}`;
   }
   if ("asset" in record) return `${record.schema}:${record.asset.id}:${record.asset.revision}`;
-  if ("id" in record && ["aira.dev/artifact-revision/v1", "aira.dev/spec-approval/v1", "aira.dev/human-waiver/v1",
-    "aira.dev/attempt/v1", "aira.dev/evidence/v1", "aira.dev/context-snapshot/v1", "aira.dev/revision-request/v1"].includes(record.schema))
+  if ("id" in record && ["aira.dev/artifact-revision/v2", "aira.dev/spec-approval/v2", "aira.dev/human-waiver/v2",
+    "aira.dev/attempt/v2", "aira.dev/evidence/v2", "aira.dev/context-snapshot/v2", "aira.dev/revision-request/v2"].includes(record.schema))
     return `${record.schema}:${record.id}`;
   if ("spec_id" in record && "revision" in record) return `${record.schema}:${record.spec_id}:${record.revision}`;
   return null;
@@ -65,7 +71,7 @@ export function artifactLineageHash(revision: ArtifactRevision): ContentHash {
 function nestedImmutable(records: readonly DomainRecord[]): Map<string, unknown> {
   const result = new Map<string, unknown>();
   for (const record of records) walk(record, (value) => {
-    if (value.schema !== "aira.dev/task-definition/v1" && value.schema !== "aira.dev/verifier/v1") return;
+    if (value.schema !== "aira.dev/task-definition/v2" && value.schema !== "aira.dev/verifier/v2") return;
     const parsed = parseRecord(value), key = logicalRecordKey(parsed)!;
     if (result.has(key) && !exact(result.get(key), parsed)) fail("STORE_INTEGRITY", "Nested immutable identity collision");
     result.set(key, parsed);
@@ -90,10 +96,23 @@ async function requiredBlob(store: BlobStore, hash: ContentHash): Promise<Uint8A
   try { return await store.get(hash); }
   catch (error) { if (errno(error, "STORE_NOT_FOUND")) fail("STORE_INTEGRITY", `Required blob is missing: ${hash}`); throw error; }
 }
+function activeIdentities(state: StoreState, records: readonly DomainRecord[]) {
+  const revisions = new Set([...state.spec.artifacts.current.map((s) => s.artifact.revision), ...state.spec.analyses.map((a) => a.revision)]);
+  return records.flatMap((r) => {
+    if (!("revision" in r) || !revisions.has(r.revision)) return [];
+    if (r.schema === "aira.dev/analysis/v2") return r.findings.map((f) => stableIdentitySchema.parse(f.id));
+    if (Object.values(planningContentContracts).includes(r.schema as never) && r.schema !== "aira.dev/intent/v1")
+      return planningEntities(r as PlanningDocument).map((e) => stableIdentitySchema.parse(e.id));
+    return [];
+  });
+}
 export function checkRecordEvolution(previous: readonly DomainRecord[], next: readonly DomainRecord[], before: StoreState, after: StoreState): void {
   validateReferenceIdentities([before, after, ...previous, ...next]);
   const identities = validateIdentityEvolution(identityRegistrySchema.parse(before.spec.identities), identityRegistrySchema.parse(after.spec.identities));
   if (identities.length) fail("STORE_INTEGRITY", `Identity registry changed: ${JSON.stringify(identities)}`);
+  const changes = validateIdentityChange(identityRegistrySchema.parse(before.spec.identities), identityRegistrySchema.parse(after.spec.identities),
+    activeIdentities(before, previous), activeIdentities(after, next));
+  if (changes.length) fail("STORE_INTEGRITY", `Stable identity evolution invalid: ${JSON.stringify(changes)}`);
   for (const old of previous) {
     const key = logicalRecordKey(old);
     const current = key ? next.find((r) => logicalRecordKey(r) === key) : next.find((r) => exact(r, old));
@@ -101,12 +120,12 @@ export function checkRecordEvolution(previous: readonly DomainRecord[], next: re
     if (exact(old, current)) continue;
     // The domain's revision request is a state machine, not an immutable decision.
     // Preserve exact initial feedback/provenance and only publish its first terminal resolution.
-    if (old.schema === "aira.dev/revision-request/v1" && current.schema === old.schema && old.status === "pending" && current.status !== "pending") {
+    if (old.schema === "aira.dev/revision-request/v2" && current.schema === old.schema && old.status === "pending" && current.status !== "pending") {
       const { status: _, ...oldBase } = old;
       if (Object.entries(oldBase).every(([k, v]) => exact(v, (current as unknown as Record<string, unknown>)[k]))) {
         if (current.status === "resolved") {
-          const artifact = next.find((r) => r.schema === "aira.dev/artifact-revision/v1" && exact(referenceOf(r), current.resolution.resulting_artifact));
-          if (!artifact || artifact.schema !== "aira.dev/artifact-revision/v1" || validateRevisionResolution(old, current.resolution, artifact).length)
+          const artifact = next.find((r) => r.schema === "aira.dev/artifact-revision/v2" && exact(referenceOf(r), current.resolution.resulting_artifact));
+          if (!artifact || artifact.schema !== "aira.dev/artifact-revision/v2" || validateRevisionResolution(old, current.resolution, artifact).length)
             fail("STORE_INTEGRITY", "Revision resolution does not supersede its exact predecessor");
         }
         continue;
@@ -117,8 +136,8 @@ export function checkRecordEvolution(previous: readonly DomainRecord[], next: re
   const oldNested = nestedImmutable(previous), newNested = nestedImmutable(next);
   for (const [key, value] of oldNested) if (!newNested.has(key) || !exact(value, newNested.get(key))) fail("STORE_INTEGRITY", "Nested immutable definition changed");
   for (const record of next.filter((r) => !previous.some((old) => exact(old, r)))) {
-    const execution = ["aira.dev/attempt/v1", "aira.dev/evidence/v1", "aira.dev/reconciliation/v1"].includes(record.schema) ||
-      (record.schema === "aira.dev/context-snapshot/v1" && ["implementation", "verification"].includes(record.phase));
+    const execution = ["aira.dev/attempt/v2", "aira.dev/evidence/v2", "aira.dev/reconciliation/v1"].includes(record.schema) ||
+      (record.schema === "aira.dev/context-snapshot/v2" && ["implementation", "verification"].includes(record.phase));
     if (execution ? exact(before.runs, after.runs) : before.spec.generation === after.spec.generation)
       fail("STORE_CONFLICT", "Record mutation requires its scoped domain generation");
   }
@@ -129,6 +148,8 @@ export function checkRecordEvolution(previous: readonly DomainRecord[], next: re
  */
 export async function validateState(store: BlobStore, state: StoreState, records: readonly DomainRecord[], full: boolean): Promise<Set<ContentHash>> {
   validateReferenceIdentities([state, ...records]);
+  const registry = identityRegistrySchema.parse(state.spec.identities), active = activeIdentities(state, records);
+  if (validateIdentityChange(registry, registry, active, active).length) fail("STORE_INTEGRITY", "Current planning identity unregistered or retired");
   const required = new Map<ContentHash, number | null>();
   const add = (hash: ContentHash, size: number | null = null): void => {
     const prior = required.get(hash);
@@ -136,19 +157,21 @@ export async function validateState(store: BlobStore, state: StoreState, records
     required.set(hash, size ?? prior ?? null);
   };
   for (const ref of state.records) add(ref.hash);
-  const revisions = records.filter((r) => r.schema === "aira.dev/artifact-revision/v1");
-  const analyses = records.filter((r) => r.schema === "aira.dev/analysis/v1");
-  const snapshots = records.filter((r) => r.schema === "aira.dev/behavioral-profile-snapshot/v1");
+  const revisions = records.filter((r) => r.schema === "aira.dev/artifact-revision/v2");
+  const analyses = records.filter((r) => r.schema === "aira.dev/analysis/v2");
+  for (const entry of state.spec.identities.entries) if (!revisions.some((r) => r.id === entry.introduced_in) ||
+    (entry.retired_in && !revisions.some((r) => r.id === entry.retired_in))) fail("STORE_INTEGRITY", "Identity registry lacks introduction/retirement revision");
+  const snapshots = records.filter((r) => r.schema === "aira.dev/behavioral-profile-snapshot/v2");
   const assets = records.filter((r) => r.schema === "aira.dev/behavioral-asset/v1");
-  const bundles = records.filter((r) => r.schema === "aira.dev/builtin-bundle/v1");
+  const bundles = records.filter((r) => r.schema === "aira.dev/builtin-bundle/v2");
   const pins: BehavioralAssetPin[] = [];
   const definitions = nestedImmutable(records);
   const values = [state.spec, ...state.runs, ...records, ...state.blobs];
   const has = (schema: DomainRecord["schema"], id: string): boolean => records.some((r) => r.schema === schema && "id" in r && r.id === id);
-  if (state.spec.approvals.some((id) => !has("aira.dev/spec-approval/v1", id)) || state.spec.waivers.some((id) => !has("aira.dev/human-waiver/v1", id)) ||
-    state.spec.revisions.some((id) => !has("aira.dev/revision-request/v1", id))) fail("STORE_INTEGRITY", "Missing human decision/revision record");
-  const attempts = records.filter((r) => r.schema === "aira.dev/attempt/v1");
-  const evidence = records.filter((r) => r.schema === "aira.dev/evidence/v1");
+  if (state.spec.approvals.some((id) => !has("aira.dev/spec-approval/v2", id)) || state.spec.waivers.some((id) => !has("aira.dev/human-waiver/v2", id)) ||
+    state.spec.revisions.some((id) => !has("aira.dev/revision-request/v2", id))) fail("STORE_INTEGRITY", "Missing human decision/revision record");
+  const attempts = records.filter((r) => r.schema === "aira.dev/attempt/v2");
+  const evidence = records.filter((r) => r.schema === "aira.dev/evidence/v2");
   for (const run of state.runs) {
     for (const id of run.attempts) {
       const attempt = attempts.find((a) => a.id === id);
@@ -177,7 +200,7 @@ export async function validateState(store: BlobStore, state: StoreState, records
   }
   for (const record of records) {
     if ("spec_id" in record && record.spec_id !== state.spec.id) fail("STORE_INTEGRITY", "Cross-Spec structured record");
-    if (record.schema === "aira.dev/spec/v1" || record.schema === "aira.dev/execution-run/v1") fail("STORE_INTEGRITY", "Spec/run snapshots belong in the authoritative state, not its record catalog");
+    if (record.schema === "aira.dev/spec/v2" || record.schema === "aira.dev/execution-run/v2") fail("STORE_INTEGRITY", "Spec/run snapshots belong in the authoritative state, not its record catalog");
     // Canonical identity-bearing structured bodies and raw asset bytes have different subjects.
     if ("identity" in record && typeof record.identity === "object" && record.identity && "hash" in record.identity) {
       const hash = record.identity.hash as ContentHash;
@@ -186,15 +209,15 @@ export async function validateState(store: BlobStore, state: StoreState, records
       }
       add(hash);
     }
-    if (record.schema === "aira.dev/spec-kind-profile/v1" || record.schema === "aira.dev/mode-profile/v1") {
+    if (record.schema === "aira.dev/spec-kind-profile/v2" || record.schema === "aira.dev/mode-profile/v2") {
       if (hashCanonical(recordBody(record)) !== record.asset.hash) fail("STORE_INTEGRITY", "Behavioral configuration does not describe its bytes");
       add(record.asset.hash);
     }
-    if (record.schema === "aira.dev/context-snapshot/v1") for (const entry of record.entries) {
+    if (record.schema === "aira.dev/context-snapshot/v2") for (const entry of record.entries) {
       add(entry.content_hash, entry.byte_size); if (entry.source) add(entry.source.original_hash);
     }
-    if (record.schema === "aira.dev/artifact-revision/v1") {
-      const expected = `aira.dev/${record.kind}/v1`;
+    if (record.schema === "aira.dev/artifact-revision/v2") {
+      const expected = planningContentContracts[record.kind];
       const document = records.find((r) => r.schema === expected && "revision" in r && r.revision === record.id);
       if (!document || hashCanonical(document) !== record.content.hash || canonicalBytes(document).length !== record.content.bytes)
         fail("STORE_INTEGRITY", "Artifact revision missing its exact canonical typed content");
@@ -212,18 +235,18 @@ export async function validateState(store: BlobStore, state: StoreState, records
     }
     if (typeof object.id === "string" && /^(profile|policy)_/.test(object.id) && typeof object.revision === "string" &&
       typeof object.hash === "string" && Object.keys(object).length === 3) add(object.hash as ContentHash);
-    if (object.schema === "aira.dev/spec-decision-policy/v1" || object.schema === "aira.dev/spec-completion-policy/v1" ||
-      object.schema === "aira.dev/task-definition/v1" || object.schema === "aira.dev/verifier/v1") {
+    if (object.schema === "aira.dev/spec-decision-policy/v2" || object.schema === "aira.dev/spec-completion-policy/v2" ||
+      object.schema === "aira.dev/task-definition/v2" || object.schema === "aira.dev/verifier/v2") {
       const definition = parseRecord(object);
       if (!("identity" in definition) || !("hash" in definition.identity) || hashCanonical(recordBody(definition)) !== definition.identity.hash)
         fail("STORE_INTEGRITY", "Nested definition content hash mismatch");
     }
     if (typeof object.id === "string" && /^[TV][1-9][0-9]*$/.test(object.id) && typeof object.revision === "string" && typeof object.hash === "string") {
-      const schema = object.id.startsWith("T") ? "aira.dev/task-definition/v1" : "aira.dev/verifier/v1";
+      const schema = object.id.startsWith("T") ? "aira.dev/task-definition/v2" : "aira.dev/verifier/v2";
       const definition = definitions.get(`${schema}:${object.id}:${object.revision}`) as { identity: unknown } | undefined;
       if (!definition || !exact(definition.identity, object)) fail("STORE_INTEGRITY", "Unknown exact task/verifier definition");
     }
-    if (object.schema === "aira.dev/approved-spec-snapshot/v1" && (object.approvals as string[]).some((id) => !has("aira.dev/spec-approval/v1", id)))
+    if (object.schema === "aira.dev/approved-spec-snapshot/v2" && (object.approvals as string[]).some((id) => !has("aira.dev/spec-approval/v2", id)))
       fail("STORE_INTEGRITY", "Approved snapshot lacks its immutable human decisions");
     const pin = behavioralAssetPinSchema.safeParse(object);
     if (pin.success) pins.push(pin.data);
@@ -238,31 +261,115 @@ export async function validateState(store: BlobStore, state: StoreState, records
       add(asset.data.hash);
     }
     if (typeof object.id === "string" && object.id.startsWith("snapshot_") && typeof object.hash === "string" && Object.keys(object).length === 2) {
-      const index = state.records.findIndex((r) => r.hash === object.hash && r.contract === "aira.dev/context-snapshot/v1");
+      const index = state.records.findIndex((r) => r.hash === object.hash && r.contract === "aira.dev/context-snapshot/v2");
       const target = records[index];
-      if (!target || target.schema !== "aira.dev/context-snapshot/v1" || target.id !== object.id) fail("STORE_INTEGRITY", "Missing exact context snapshot");
+      if (!target || target.schema !== "aira.dev/context-snapshot/v2" || target.id !== object.id) fail("STORE_INTEGRITY", "Missing exact context snapshot");
     }
   });
-  for (const document of records.filter((r) => r.schema === "aira.dev/tasks/v1")) {
+  for (const document of records.filter((r) => r.schema === "aira.dev/tasks/v2")) {
     const contexts = document.tasks.flatMap((t) => t.context.references).filter((ref) => {
-      const index = state.records.findIndex((r) => r.contract === "aira.dev/context-declaration/v1" && r.hash === ref.hash);
+      const index = state.records.findIndex((r) => r.contract === "aira.dev/context-declaration/v2" && r.hash === ref.hash);
       const record = records[index];
-      return record?.schema === "aira.dev/context-declaration/v1" && record.id === ref.id;
+      return record?.schema === "aira.dev/context-declaration/v2" && record.id === ref.id;
     });
     const graphIssues = validateTaskGraph(document, {
-      requirements: records.flatMap((r) => r.schema === "aira.dev/requirements/v1" ? r.requirements : []),
-      decisions: records.flatMap((r) => r.schema === "aira.dev/design/v1" ? r.decisions : []),
+      requirements: records.flatMap((r) => r.schema === "aira.dev/requirements/v2" ? r.requirements : []),
+      decisions: records.flatMap((r) => r.schema === "aira.dev/architecture/v1" ? r.decisions : []),
+      program_decisions: records.flatMap((r) => r.schema === "aira.dev/program-design/v1" ? r.decisions : []),
       verifiers: [...definitions.values()].flatMap((r) => {
         const record = r as DomainRecord;
-        return record.schema === "aira.dev/verifier/v1" ? [record.identity] : [];
+        return record.schema === "aira.dev/verifier/v2" ? [record.identity] : [];
       }),
       policies: records.flatMap((r) => r.schema === "aira.dev/capability-policy/v1" ? [r.identity] : []),
       execution_profiles: records.flatMap((r) => r.schema === "aira.dev/execution-profile/v1" ? [r.identity] : []), contexts,
     });
     if (graphIssues.length) fail("STORE_INTEGRITY", `Task reference closure invalid: ${JSON.stringify(graphIssues)}`);
   }
+  const planning = records.filter((r): r is PlanningDocument => ["aira.dev/product/v1", "aira.dev/requirements/v2", "aira.dev/architecture/v1",
+    "aira.dev/program-design/v1", "aira.dev/slice-plan/v1", "aira.dev/tasks/v2", "aira.dev/verification-plan/v2"].includes(r.schema));
+  const entities = planning.map((document) => {
+    const revision = revisions.find((r) => r.id === document.revision);
+    if (!revision) fail("STORE_INTEGRITY", "Planning document lacks its immutable artifact envelope");
+    return { artifact: referenceOf(revision), entities: planningEntities(document).map((e) => ({ id: e.id, hash: hashCanonical(e.value) })) };
+  });
+  // Resolve reference catalogs through exact provenance, not all historical entities with the same ID.
+  function upstream<S extends PlanningDocument["schema"]>(revision: string, schema: S): Extract<PlanningDocument, { schema: S }> | undefined {
+    let layer = [revision]; const seen = new Set<string>();
+    while (layer.length) {
+      const matches = planning.filter((p) => layer.includes(p.revision) && p.schema === schema);
+      if (matches.length > 1) fail("STORE_INTEGRITY", "Ambiguous exact planning input");
+      if (matches.length === 1) return matches[0] as Extract<PlanningDocument, { schema: S }>;
+      const next: string[] = [];
+      for (const id of layer) {
+        if (seen.has(id)) continue; seen.add(id);
+        const r = revisions.find((r) => r.id === id);
+        next.push(...(r?.lineage.filter((e) => e.relation !== "supersedes" && e.target.kind !== r.kind).map((e) => e.target.revision) ?? []));
+      }
+      layer = [...new Set(next)].filter((id) => !seen.has(id));
+    }
+    return undefined;
+  }
+  for (const document of planning) {
+    const product = upstream(document.revision, "aira.dev/product/v1"), req = upstream(document.revision, "aira.dev/requirements/v2"),
+      arch = upstream(document.revision, "aira.dev/architecture/v1"), program = upstream(document.revision, "aira.dev/program-design/v1"),
+      slices = upstream(document.revision, "aira.dev/slice-plan/v1");
+    const defects: import("../../spec/domain/primitives").DomainIssue[] = [];
+    if (document.schema === "aira.dev/requirements/v2") {
+      if (product) defects.push(...validateRequirementsProduct(document, product).filter((i) => i.code !== "requirement-product-coverage-missing"));
+      else if (document.requirements.some((r) => r.product_outcomes.length || r.success_criteria.length)) defects.push({ code: "requirements-product-input-missing" });
+    }
+    if (document.schema === "aira.dev/architecture/v1") {
+      const validation = state.spec.lineage.validations.find((v) => v.subject.revision === document.revision);
+      const against = planning.find((p) => p.schema === "aira.dev/requirements/v2" && validation?.against.some((a) => a.revision === p.revision));
+      defects.push(...validateArchitecture(document, req ?? (against?.schema === "aira.dev/requirements/v2" ? against : undefined)));
+    }
+    if (document.schema === "aira.dev/program-design/v1") {
+      if (!arch || !req) defects.push({ code: "program-design-input-missing" });
+      else defects.push(...validateProgramDesign(document, arch, req));
+    }
+    if (document.schema === "aira.dev/slice-plan/v1") {
+      if (!product || !req || !arch || !program) defects.push({ code: "slice-plan-input-missing" });
+      else {
+        const verification = planning.find((p) => p.schema === "aira.dev/verification-plan/v2" &&
+          upstream(p.revision, "aira.dev/slice-plan/v1")?.revision === document.revision);
+        defects.push(...validateSliceReferences(document, product, req, arch, program, verification?.schema === "aira.dev/verification-plan/v2" ? verification : undefined));
+      }
+    }
+    if (document.schema === "aira.dev/verification-plan/v2") {
+      const tasks = upstream(document.revision, "aira.dev/tasks/v2");
+      if (!slices || !req || !tasks) defects.push({ code: "verification-planning-input-missing" });
+      else for (const verifier of document.verifiers) {
+        if (verifier.slices.some((id) => !slices.slices.some((s) => s.id === id)) ||
+          verifier.tasks.some((id) => !tasks.tasks.some((t) => t.identity.id === id && t.verifiers.includes(verifier.identity.id))) ||
+          verifier.requirements.some((id) => !req.requirements.some((r) => r.id === id)) ||
+          verifier.acceptance_criteria.some((id) => !req.requirements.some((r) => r.acceptance_criteria.some((a) => a.id === id)))) defects.push({ code: "verifier-exact-planning-reference-missing", verifier: verifier.identity.id });
+      }
+    }
+    if (document.schema === "aira.dev/tasks/v2") {
+      if (!slices || !arch || !program || !req) defects.push({ code: "task-planning-input-missing" });
+      else {
+        defects.push(...validateTaskSliceConsistency(slices, document));
+        for (const t of document.tasks) {
+          if (t.architecture_decisions.some((id) => !arch.decisions.some((d) => d.id === id)) ||
+            t.program_design_decisions.some((id) => !program.decisions.some((d) => d.id === id)) ||
+            t.requirements.some((id) => !req.requirements.some((r) => r.id === id)) ||
+            t.acceptance_criteria.some((id) => !req.requirements.some((r) => r.acceptance_criteria.some((a) => a.id === id)))) defects.push({ code: "task-exact-planning-reference-missing", task: t.identity.id });
+        }
+      }
+    }
+    if (defects.length) fail("STORE_INTEGRITY", `Planning reference closure invalid: ${JSON.stringify(defects)}`);
+  }
+  const targetIssues = validateFindingTargets(analyses, planning);
+  if (targetIssues.length) fail("STORE_INTEGRITY", `Finding target invalid: ${JSON.stringify(targetIssues)}`);
+  for (const run of state.runs) for (const slice of run.slices) {
+    const plan = planning.find((p) => p.schema === "aira.dev/slice-plan/v1" && p.revision === slice.plan.revision);
+    if (!plan || plan.schema !== "aira.dev/slice-plan/v1" || !plan.slices.some((s) => s.id === slice.slice) ||
+      !run.snapshot.artifacts.some((s) => exact(s.artifact, slice.plan))) fail("STORE_INTEGRITY", "Unknown run slice definition");
+    for (const selected of slice.current_evidence) if (!evidence.some((e) => e.id === selected.evidence && e.verifier.id === selected.verifier &&
+      e.slices.includes(slice.slice) && exact(e.snapshot, run.snapshot) && run.attempts.includes(e.attempt))) fail("STORE_INTEGRITY", "Slice evidence binding mismatch");
+  }
   // Intrinsic lineage closure/cycles are storage integrity; approval/readiness/completion remain Core decisions.
-  const issues = currentLineageValidity({ revisions, validations: state.spec.lineage.validations,
+  const issues = currentLineageValidity({ entities, revisions, validations: state.spec.lineage.validations,
     current: [...state.spec.artifacts.current.map((s) => s.artifact), ...state.spec.analyses], proposed: state.spec.artifacts.proposed,
     invalidations: state.spec.lineage.invalidations, analyses, generation: state.spec.generation });
   if (issues.length) fail("STORE_INTEGRITY", `Invalid lineage: ${JSON.stringify(issues)}`);
@@ -270,7 +377,7 @@ export async function validateState(store: BlobStore, state: StoreState, records
     if (!state.behavioral_environment) fail("STORE_INTEGRITY", "Pinned assets require an explicit compatibility environment");
     const catalog: BehavioralAssetCatalog = {
       assets: assets.map((revision) => {
-        const configuration = records.find((r) => (r.schema === "aira.dev/spec-kind-profile/v1" || r.schema === "aira.dev/mode-profile/v1") && exact(r.asset, revision.identity));
+        const configuration = records.find((r) => (r.schema === "aira.dev/spec-kind-profile/v2" || r.schema === "aira.dev/mode-profile/v2") && exact(r.asset, revision.identity));
         return { revision, verified_content_hash: revision.identity.hash,
           ...(configuration && "asset" in configuration ? { configuration } : {}) };
       }), bundles: bundles.map((manifest) => ({ manifest, verified_content_hash: manifest.identity.hash })),

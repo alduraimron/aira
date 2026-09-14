@@ -1,61 +1,81 @@
-# ADR-004: Design-first provenance without circular derivation
+# ADR-004: Architecture-first provenance without circular derivation
 
-Status: accepted. Normative for v2.
+Status: accepted. Normative for v2. Stage 05B explicitly evolves the original
+pre-release design-first terminology under [ADR-012](012-canonical-planning-ontology.md).
+This stable document path is retained for existing references, not as a canonical mode.
 
 ## Context
 
-A design can inform requirements and later be checked against them without being derived from its own descendant. Rewriting provenance or duplicating unchanged content to force a linear pipeline would misrepresent history.
+Architecture can inform Requirements and later be checked against them without being
+derived from its own descendant. Rewriting provenance or duplicating unchanged content
+to force a linear pipeline would misrepresent history. Architecture and Program Design
+are now distinct canonical artifacts, and Product intent precedes both authoring orders.
 
 ## Decision
 
-Model relationship semantics explicitly:
-
-- `derived_from`: immutable generation/content provenance between exact revision identities. The derivation graph must not contain a cycle.
-- `validated_against`: an exact-bound analysis/applicability relationship. It records consistency against other revisions and its findings/outcome; it is not derivation and does not rewrite artifact content.
+- `derived_from`: immutable generation/content provenance between exact revision/hash
+  identities. The derivation graph must remain acyclic.
+- `validated_against`: exact-bound analysis/applicability. It records consistency against
+  other revisions and findings/outcome; it is not derivation and does not rewrite content.
 
 Requirements-first:
 
 ```text
-Requirements r1 -> Design d1 derived_from r1
+Intent -> Product p1 -> Requirements r1 -> Architecture a1
+       -> Program Design pd1 -> Slice Plan s1 -> Tasks t1
 ```
 
-Design-first:
+Architecture-first:
 
 ```text
-Intent i1 -> Design d1 derived_from i1
-Intent i1 + Design d1 -> Requirements r1 derived_from [i1, d1]
-Design d1 validated_against Requirements r1
+Intent -> Product p1
+Product p1 -> Architecture proposal a1 derived_from p1
+Product p1 + Architecture a1 -> Requirements r1 derived_from [p1, a1]
+Architecture a1 validated_against Requirements r1
+Architecture a1 + Requirements r1 -> Program Design pd1 -> Slices -> Tasks
 ```
 
-The final line is a separate committed applicability/analysis record, not a retroactive `d1 derived_from r1` edge. Revision identities and content hashes remain immutable.
+The consistency line is a separate committed applicability/analysis record, never a
+retroactive `a1 derived_from r1` edge. Revision identities and hashes remain immutable.
 
-### Design-first lifecycle
+### Architecture-first lifecycle
 
-1. Propose an initial design from intent.
-2. A human approves the exact design artifact.
-3. Generate requirements from intent plus that approved design.
-4. A human approves the exact requirements artifact.
-5. Analyze the design against current requirements, recording exact revision/hash inputs and structured consistency findings.
-6. If design content is unchanged and analysis proves consistency, record `validated_against` applicability for the same d1. Do not manufacture a duplicate content revision or a redundant content approval merely to enforce a false derivation order.
-7. If content must change, publish d2, which may be `derived_from: [d1, r1]`. It requires appropriate human approval before becoming current and applicable; analyze resulting consistency explicitly.
-8. Tasks may become current only after requirements and applicable design are mutually consistent and the mode's required human gates are satisfied.
+1. Author/analyze/approve Product and propose Architecture from that Product.
+2. Approve the exact Architecture artifact under the configured human gates.
+3. Generate/analyze Requirements from Product plus that approved Architecture.
+4. Approve the exact Requirements artifact.
+5. Analyze Architecture against current Requirements, binding exact inputs/findings.
+6. If consistent without content changes, record validation for the same a1. Do not
+   fabricate a duplicate revision or redundant human content approval.
+7. If content must change, publish a2, which may derive from a1/r1, with appropriate
+   new approval and explicit resulting consistency validation.
+8. Author Program Design, Slices and Tasks only with applicable upstream planning and
+   mutually consistent Requirements/Architecture. Tasks cannot authorize execution
+   without the complete chain and required approvals.
 
-Derivation records what influenced creation. Applicability records whether a revision can be used now. Earlier approval of d1 alone does not prove consistency against later requirements. An analysis may change applicability/Spec generation without changing artifact content identity; exact approval carry-forward follows [ADR-003](003-generation-and-fencing.md).
+Derivation records influence at creation; applicability records current usability.
+Earlier Architecture approval alone does not prove later Requirement consistency.
+Current carry-forward still follows [ADR-003](003-generation-and-fencing.md).
 
 ### Quick mode
 
-Quick mode produces the same canonical requirements, design, and structured tasks, including required analyses/validation and traceability. It removes intermediate human gates, including any intermediate gates of the chosen authoring order, not consistency obligations. Tasks can be proposed for integrated review before human approval but cannot authorize execution then.
+Quick creates and analyzes Product, Requirements, Architecture, Program Design, Slices
+and Tasks under either authoring order. It removes intermediate human interruptions,
+not quality, consistency, traceability or completion obligations. A final explicit human
+operation binds all six exact revision/hash subjects and observed Spec generation,
+atomically recording individual applicability. Partial/inconsistent/stale sets fail.
 
-At final integrated review, a single explicit human decision may approve the exact requirements/design/task revision/hash set and observed Spec generation. The transaction records individual artifact approval applicability. It must reject stale, inconsistent, or partially valid sets, rather than approving an opaque bundle name.
+### Revisions and staleness
 
-### Revision, findings, and invalidation
-
-Revision feedback records requested change, exact targets, actor provenance, and resolution. Findings bind analyzed revisions and retain historical disposition; resolution, waiver, and revalidation are explicit Spec mutations. Relevant upstream changes invalidate affected downstream applicability (design, tasks, approvals, runs, evidence, completion) transitively. Preserve old records; never silently make them current by following a reused path. Revalidate unchanged content explicitly against exact current inputs. MUST-level traceability gaps require resolution or an explicit policy-authorized human waiver.
-
-## Consequences
-
-The first schema needs typed relationships, analysis/applicability records, and downstream invalidation, not one untyped list of parent filenames. No circular lineage is necessary, and no locked lifecycle decision is technically contradictory.
+Revision feedback records exact targets, actor provenance and resolution. Findings,
+waivers and revalidation are explicit Spec mutations. Relevant changes invalidate only
+causally dependent downstream applicability while preserving history. Unchanged scoped
+inputs may retain applicability using exact measured entity hashes; absent observations
+fail closed. Invalidation cannot return through reverse validation to invalidate its own
+new authoritative input. Independent invalidations still win. Required coverage gaps
+need resolution or an explicitly policy-authorized waiver; waivers never invent evidence.
 
 ## Invariants
 
-INV-LINEAGE-001, INV-LINEAGE-002, INV-LINEAGE-003, INV-SPEC-003, INV-APPROVAL-003, INV-TRACE-001.
+INV-LINEAGE-001/002/003, INV-SPEC-003, INV-APPROVAL-003, INV-TRACE-001/002,
+INV-PRODUCT-001, INV-ARCH-001, INV-PROGDESIGN-001, INV-SLICE-001/002/003/004.

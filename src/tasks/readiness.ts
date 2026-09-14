@@ -6,9 +6,16 @@ import { orderTasks, validateTaskGraph, type TaskReferenceCatalog } from "./grap
 import type { Tasks } from "./types";
 import { specSchema } from "../spec/domain/schema";
 import { taskExecutionStateSchema } from "../execution/schema";
+import { sliceReadiness, validateTaskSliceConsistency, type SlicePlan } from "../spec/domain/slices";
+import type { SliceExecutionState } from "../spec/domain/slice-state";
+import type { SliceId } from "../spec/domain/ids";
 
 export interface ReadinessInput {
   readonly definitions: Tasks;
+  readonly slices: SlicePlan;
+  readonly slice_states: readonly SliceExecutionState[];
+  /** Explicit active selections, not an implied first array element. */
+  readonly active_slices: readonly SliceId[];
   readonly catalog: TaskReferenceCatalog;
   readonly states: readonly TaskExecutionState[];
   readonly review: SpecReviewContext;
@@ -22,7 +29,11 @@ export interface TaskReadiness {
   readonly issues: readonly DomainIssue[];
 }
 export function taskReadiness(input: ReadinessInput): TaskReadiness {
-  const global = [...evaluateSpecGates(input.review), ...validateTaskGraph(input.definitions, input.catalog)];
+  const sliceStatus = sliceReadiness({ plan: input.slices, states: input.slice_states, review: input.review });
+  const global = [...evaluateSpecGates(input.review), ...validateTaskGraph(input.definitions, input.catalog),
+    ...validateTaskSliceConsistency(input.slices, input.definitions), ...sliceStatus.issues];
+  if (new Set(input.active_slices).size !== input.active_slices.length || input.active_slices.some((id) => !input.slices.slices.some((s) => s.id === id)))
+    global.push({ code: "invalid-active-slice-selection" });
   if (!specSchema.safeParse(input.review.spec).success) global.push({ code: "invalid-domain-contract", subject: "spec" });
   if (input.states.length && !input.review.spec.run_binding) global.push({ code: "run-binding-inapplicable" });
   const current = input.review.spec.artifacts.current.find((s) => s.artifact.kind === "tasks");
@@ -45,6 +56,9 @@ export function taskReadiness(input: ReadinessInput): TaskReadiness {
     if (state && ["completed", "failed", "skipped", "cancelled"].includes(state.status)) { terminal.push({ task: task.identity.id, state: state.status }); continue; }
     if (state && ["claimed", "running", "verifying"].includes(state.status)) { active.push(task.identity.id); continue; }
     const reasons: DomainIssue[] = [...global, ...input.preconditions.filter((p) => p.task === task.identity.id).flatMap((p) => p.blockers)];
+    if (!input.active_slices.includes(task.slice) || ![...sliceStatus.ready, ...sliceStatus.active].includes(task.slice) ||
+      input.slice_states.some((s) => s.slice === task.slice && s.status === "verifying"))
+      reasons.push({ code: "owning-slice-not-runnable", task: task.identity.id, subject: task.slice });
     if (state && !["pending", "ready"].includes(state.status)) reasons.push({ code: "task-recovery-required", task: task.identity.id, subject: state.status });
     for (const dep of task.dependencies) {
       const states = input.states.filter((s) => s.task.id === dep);

@@ -10,15 +10,17 @@ import { approvalApplicabilitySchema, specDecisionPolicySchema, waiverApplicabil
 import { runBindingSchema } from "../../execution/schema";
 
 export const completionPolicySchema = z.strictObject({
-  schema: z.literal("aira.dev/spec-completion-policy/v1"), identity: policyReferenceSchema,
+  schema: z.literal("aira.dev/spec-completion-policy/v2"), identity: policyReferenceSchema,
   traceability: z.enum(["must", "must-and-should", "all"]),
+  product_coverage: z.strictObject({ outcomes: z.boolean(), success_criteria: z.boolean(), evidence: z.boolean() }),
+  planning_coverage: z.strictObject({ architecture_implementation: z.boolean(), program_design_exercised: z.boolean() }),
   allow_agent_review: z.boolean(), final_consistency_review_required: z.boolean(),
   verification_plan_approval_required: z.boolean(),
 });
 export const specSchema = z.strictObject({
-  schema: z.literal("aira.dev/spec/v1"), id: specIdSchema, title: nonBlankSchema,
+  schema: z.literal("aira.dev/spec/v2"), id: specIdSchema, title: nonBlankSchema,
   kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
-  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "design-first"]), lifecycle: lifecycleSchema,
+  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "architecture-first"]), lifecycle: lifecycleSchema,
   commit_sequence: commitSequenceSchema.optional(), generation: specGenerationSchema,
   artifacts: z.strictObject({ current: z.array(artifactSubjectSchema), proposed: z.array(artifactReferenceSchema), superseded: z.array(artifactReferenceSchema) }),
   analyses: z.array(artifactReferenceSchema.refine((a) => a.kind === "analysis")),

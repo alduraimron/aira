@@ -12,7 +12,7 @@ import { withRun } from "./run-fixture";
 const clean: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const f of clean.splice(0)) await f(); });
 const f = fixture();
-const codecRecords: DomainRecord[] = [f.spec, f.requirements, f.design, f.tasks, ...f.review.revisions, ...f.review.analyses,
+const codecRecords: DomainRecord[] = [f.spec, f.product, f.requirements, f.architecture, f.program_design, f.slices, f.sliceState, f.tasks, ...f.review.revisions, ...f.review.analyses,
   ...f.review.approvals, f.run, f.attempt, f.record, f.plan, f.plan.verifiers[0]!, f.tasks.tasks[0]!, f.state,
   snapshot(), capabilityPolicy(), declaration(), fingerprint(), backend(), f.workspace, ...baseBehavioralCatalog().assets.map((a) => a.revision)];
 for (const [index, value] of codecRecords.entries()) test(`exact domain codec ${index}: ${value.schema}`, async () => {
@@ -39,7 +39,7 @@ test("historical embedded policy revision cannot be rebound after selecting anot
   t.state.spec.decision_policy.identity.revision = "rev_second" as never;
   let body = structured(recordBody(t.state.spec.decision_policy)); t.state.spec.decision_policy.identity.hash = body.hash;
   const next = await x.store.commit(t, [body]);
-  const changed = mutation(next, "operation_rebind"); changed.state.spec.decision_policy.waivable = ["requirement-design-missing"];
+  const changed = mutation(next, "operation_rebind"); changed.state.spec.decision_policy.waivable = ["requirement-architecture-missing"];
   changed.state.spec.decision_policy.identity.revision = x.result.state.spec.decision_policy.identity.revision;
   body = structured(recordBody(changed.state.spec.decision_policy)); changed.state.spec.decision_policy.identity.hash = body.hash;
   await code(x.store.commit(changed, [body]), "STORE_INTEGRITY");
@@ -52,7 +52,7 @@ test("record format dispatch does not reinterpret unknown contracts or versions"
 test("exact bundle attribution persists with measured member and bundle bytes", async () => {
   const x = await created(); clean.push(x.cleanup); const request = withRun(x.result);
   const assets = request.records.filter((r) => r.schema === "aira.dev/behavioral-asset/v1").map((r) => r.identity);
-  const body = { schema: "aira.dev/builtin-bundle/v1", distribution_version: "synthetic-tests-only", compatibility: syntheticCompatibility,
+  const body = { schema: "aira.dev/builtin-bundle/v2", distribution_version: "synthetic-tests-only", compatibility: syntheticCompatibility,
     assets, defaults: [], spec_kinds: [], modes: [] };
   const manifest = builtinBundleManifestSchema.parse({ ...body, identity: { id: "bundle.aira.test", revision: "1", hash: hashCanonical(body) } });
   const encoded = encodeRecord(manifest); request.transaction.state.records.push(encoded.reference);

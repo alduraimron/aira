@@ -6,7 +6,7 @@ import { timestampSchema } from "../../src/spec/domain/primitives";
 import { specSchema } from "../../src/spec/domain/schema";
 import { artifactRevisionSchema, intentSchema, validateImmutableRevision, type ArtifactRevision } from "../../src/spec/domain/artifacts";
 import { requirementsSchema, requirementSchema, acceptanceCriterionSchema } from "../../src/spec/domain/requirements";
-import { designSchema } from "../../src/spec/domain/design";
+import { architectureSchema } from "../../src/spec/domain/architecture";
 import { analysisSchema } from "../../src/spec/domain/analysis";
 import { tasksSchema } from "../../src/tasks/schema";
 import { executionRunSchema, attemptRecordSchema, taskExecutionStateSchema } from "../../src/execution/schema";
@@ -21,7 +21,7 @@ import { fixture, capabilityPolicy, snapshot, declaration, metadata } from "./fi
 const formats: [string, z.ZodType, string, string[]][] = [
   ["RequirementId", ids.requirementIdSchema, "R12", ["R0", "R01", "r1", "R1.2", "R-1", " R1"]],
   ["AcceptanceCriterionId", ids.acceptanceCriterionIdSchema, "R12.AC4", ["R0.AC1", "R1.AC0", "R1.AC01", "AC1", "R1.ac1"]],
-  ["DesignDecisionId", ids.designDecisionIdSchema, "D2", ["D0", "D01", "d1"]],
+  ["ArchitectureDecisionId", ids.architectureDecisionIdSchema, "A2", ["A0", "A01", "d1"]],
   ["TaskId", ids.taskIdSchema, "T2", ["T0", "T01", "t1"]], ["VerifierId", ids.verifierIdSchema, "V3", ["V0", "V01", "v1"]],
   ["SpecId", ids.specIdSchema, "spec_one", ["one", "spec_", "spec_../one"]],
   ["ArtifactRevisionId", ids.artifactRevisionIdSchema, "rev_one", ["one", "rev_", "rev_/one"]],
@@ -43,13 +43,13 @@ describe("stable branded identity contracts", () => {
     for (const value of invalid) expect(schema.safeParse(value).success).toBe(false);
   });
   test("INV-SPEC-002: registry tombstones prevent deletion/reuse", () => {
-    const previous = ids.identityRegistrySchema.parse({ schema: "aira.dev/identity-registry/v1", entries: [{ id: "R1", introduced_in: "rev_r1", retired_in: "rev_r2" }] });
+    const previous = ids.identityRegistrySchema.parse({ schema: "aira.dev/identity-registry/v2", entries: [{ id: "R1", introduced_in: "rev_r1", retired_in: "rev_r2" }] });
     expect(ids.validateIdentityEvolution(previous, { ...previous, entries: [] })).toEqual(["R1"]);
     expect(ids.validateIdentityEvolution(previous, { ...previous, entries: [{ id: ids.requirementIdSchema.parse("R1"), introduced_in: ids.artifactRevisionIdSchema.parse("rev_r3") }] })).toEqual(["R1"]);
     expect(ids.validateIdentityEvolution(previous, structuredClone(previous))).toEqual([]);
   });
   test("removal requires a tombstone and a retired identity cannot re-enter the active set", () => {
-    const registry = ids.identityRegistrySchema.parse({ schema: "aira.dev/identity-registry/v1", entries: [{ id: "R1", introduced_in: "rev_r1" }] });
+    const registry = ids.identityRegistrySchema.parse({ schema: "aira.dev/identity-registry/v2", entries: [{ id: "R1", introduced_in: "rev_r1" }] });
     const active = [ids.requirementIdSchema.parse("R1")];
     expect(ids.validateIdentityChange(registry, registry, active, []).map((i) => i.code)).toContain("identity-retirement-missing");
     const retired = ids.identityRegistrySchema.parse({ ...registry, entries: [{ ...registry.entries[0]!, retired_in: "rev_r2" }] });
@@ -107,7 +107,7 @@ describe("INV-GEN-001/002: separate bounded counters", () => {
 describe("strict, versioned persisted contracts", () => {
   const f = fixture();
   const documents: [z.ZodType, object][] = [
-    [specSchema, f.spec], [artifactRevisionSchema, f.req], [requirementsSchema, f.requirements], [designSchema, f.design], [tasksSchema, f.tasks],
+    [specSchema, f.spec], [artifactRevisionSchema, f.req], [requirementsSchema, f.requirements], [architectureSchema, f.architecture], [tasksSchema, f.tasks],
     [analysisSchema, f.review.analyses[0]!], [executionRunSchema, f.run], [attemptRecordSchema, f.attempt], [taskExecutionStateSchema, f.state],
     [verificationPlanSchema, f.plan], [verificationEvidenceSchema, f.record], [workspaceFingerprintSchema, f.workspace.fingerprint], [executionBackendSchema, f.backend],
     [contextSnapshotSchema, snapshot()], [contextDeclarationSchema, declaration()], [capabilityPolicySchema, capabilityPolicy()], [specApprovalRecordSchema, f.review.approvals[0]!],

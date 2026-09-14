@@ -3,7 +3,7 @@ import { exact, type PolicyReference, type ProfileReference } from "../spec/doma
 import { behavioralPinsSchema, hasRoles, type BehavioralAssetPin, type BehavioralRole } from "./roles";
 
 export const attemptBehaviorSchema = z.strictObject({
-  purpose: z.enum(["clarification", "requirements-generation", "requirements-analysis", "design-generation", "design-analysis", "task-generation", "task-analysis",
+  purpose: z.enum(["clarification", "requirements-generation", "requirements-analysis", "architecture-generation", "architecture-analysis", "task-generation", "task-analysis",
     "implementation", "repair", "implementation-review", "verification-review", "final-spec-review"]),
   pins: behavioralPinsSchema,
 }).refine((b) => hasRoles(b.pins, [b.purpose, "context-profile", "capability-profile", "execution-profile"]), "attempt-behavioral-input-missing");

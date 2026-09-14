@@ -18,15 +18,16 @@ export const metadata = { at, by: human, operation: "operation_author", channel:
 export const raw = (value: string): BlobInput => { const bytes = new TextEncoder().encode(value); return { hash: hashBytes(bytes), bytes }; };
 export const structured = (value: unknown): BlobInput => { const bytes = canonicalBytes(value); return { hash: hashBytes(bytes), bytes }; };
 export function creation(id = "spec_one", operation = "operation_create") {
-  const decision = { schema: "aira.dev/spec-decision-policy/v1", waivable: [], required_analyses: ["requirements", "design", "tasks"] };
-  const completion = { schema: "aira.dev/spec-completion-policy/v1", traceability: "must", allow_agent_review: false,
+  const decision = { schema: "aira.dev/spec-decision-policy/v2", waivable: [], required_analyses: ["product", "requirements", "architecture", "program-design", "slice-plan", "tasks"] };
+  const completion = { schema: "aira.dev/spec-completion-policy/v2", traceability: "must", product_coverage: { outcomes: true, success_criteria: true, evidence: true },
+    planning_coverage: { architecture_implementation: true, program_design_exercised: true }, allow_agent_review: false,
     final_consistency_review_required: false, verification_plan_approval_required: false };
   const blobs = [structured(decision), structured(completion)];
-  const spec = specSchema.parse({ schema: "aira.dev/spec/v1", id, title: "Persistence test", kind: "feature",
+  const spec = specSchema.parse({ schema: "aira.dev/spec/v2", id, title: "Persistence test", kind: "feature",
     mode: "requirements-first", authoring_order: "requirements-first", lifecycle: { state: "draft" }, generation: "0",
     artifacts: { current: [], proposed: [], superseded: [] }, analyses: [], behavioral_selections: [], behavioral_profiles: [],
     lineage: { validations: [], invalidations: [] }, approvals: [], approval_applicability: [], revisions: [], waivers: [], waiver_applicability: [],
-    identities: { schema: "aira.dev/identity-registry/v1", entries: [] },
+    identities: { schema: "aira.dev/identity-registry/v2", entries: [] },
     decision_policy: { ...decision, identity: { id: "policy_decision", revision: "rev_decision", hash: blobs[0]!.hash } },
     completion_policy: { ...completion, identity: { id: "policy_completion", revision: "rev_completion", hash: blobs[1]!.hash } },
     created: metadata, updated_at: at, metadata: { labels: [], external_references: [] } });
@@ -44,16 +45,16 @@ export function mutation(snapshot: StoreSnapshot, operation = "operation_edit", 
     events: [{ kind: audit ? "inspected" : "title-changed", identities: [snapshot.head.spec_id], payloads: [] }] });
 }
 export function withRequirements(input: StoreTransaction) {
-  const document = requirementsSchema.parse({ schema: "aira.dev/requirements/v1", spec_id: input.spec_id, revision: "rev_requirements",
-    requirements: [{ id: "R1", type: "functional", title: "Atomic storage", priority: "must", statement: "Publication is atomic", dependencies: [],
+  const document = requirementsSchema.parse({ schema: "aira.dev/requirements/v2", spec_id: input.spec_id, revision: "rev_requirements",
+    requirements: [{ id: "R1", type: "functional", title: "Atomic storage", priority: "must", statement: "Publication is atomic", dependencies: [], product_outcomes: [], success_criteria: [],
       rationale: "No partial state", assumptions: ["local filesystem"], acceptance_criteria: [{ id: "R1.AC1", form: "ubiquitous", expected_behavior: "Readers see old or new" }] }] });
   const body = encodeRecord(document);
-  const revision = artifactRevisionSchema.parse({ schema: "aira.dev/artifact-revision/v1", id: document.revision, spec_id: input.spec_id, kind: "requirements",
+  const revision = artifactRevisionSchema.parse({ schema: "aira.dev/artifact-revision/v2", id: document.revision, spec_id: input.spec_id, kind: "requirements",
     content: { hash: body.reference.hash, bytes: body.bytes.length, media_type: "application/json" }, lineage: [], created: metadata });
   const envelope = encodeRecord(revision);
   const transaction = transactionSchema.parse({ ...input, state: { ...input.state,
     spec: { ...input.state.spec, artifacts: { ...input.state.spec.artifacts, current: [{ artifact: referenceOf(revision), lineage_hash: artifactLineageHash(revision) }] },
-      identities: { schema: "aira.dev/identity-registry/v1", entries: [{ id: "R1", introduced_in: document.revision }, { id: "R1.AC1", introduced_in: document.revision }] } },
+      identities: { schema: "aira.dev/identity-registry/v2", entries: [{ id: "R1", introduced_in: document.revision }, { id: "R1.AC1", introduced_in: document.revision }] } },
     records: [...input.state.records, body.reference, envelope.reference] } });
   return { transaction, document, revision, blobs: [body, envelope].map((r) => ({ hash: r.reference.hash, bytes: r.bytes })) };
 }

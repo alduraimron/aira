@@ -10,7 +10,7 @@ import type { AssetCompatibilityEnvironment } from "./compatibility";
 // Reuse the existing profile revision/hash vocabulary, not context-snapshot IDs.
 export const behavioralProfileSnapshotReferenceSchema = profileReferenceSchema;
 export const behavioralProfileSnapshotSchema = z.strictObject({
-  schema: z.literal("aira.dev/behavioral-profile-snapshot/v1"), identity: behavioralProfileSnapshotReferenceSchema,
+  schema: z.literal("aira.dev/behavioral-profile-snapshot/v2"), identity: behavioralProfileSnapshotReferenceSchema,
   spec_id: specIdSchema, generation: specGenerationSchema, phase: authoringBehavioralPhaseSchema,
   request: behavioralResolutionRequestSchema, resolution: behavioralResolutionSchema, created: createdMetadataSchema,
 }).refine((s) => s.request.task.length === 0 && s.request.kind === s.resolution.kind && s.request.custom_kind === s.resolution.custom_kind &&

@@ -55,6 +55,7 @@ export function evidenceApplicability(evidence: VerificationEvidence, context: E
   if (evidence.context.length !== context.attempt.context.length || evidence.context.some((c) => !context.attempt.context.some((a) => exact(a, c)))) add("evidence-context-mismatch");
   if (evidence.requirements.some((r) => !context.verifier.requirements.includes(r)) ||
     evidence.acceptance_criteria.some((a) => !context.verifier.acceptance_criteria.includes(a)) ||
+    evidence.slices.some((s) => !context.verifier.slices.includes(s)) ||
     !context.verifier.tasks.includes(evidence.task.id)) add("evidence-traceability-mismatch");
   if (context.verifier.definition.kind === "human-review" && evidence.review_actor?.kind !== "human") add("evidence-human-review-required");
   if (context.verifier.definition.kind === "agent-review" && (!context.allow_agent_review || evidence.review_actor?.kind !== "agent" ||

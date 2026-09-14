@@ -33,7 +33,7 @@ The schema permits future explicitly scoped applicability (for example, declared
 
 ### Traceability and completion
 
-Evidence connects to verifiers/tasks/design decisions/acceptance criteria/requirements through structured exact-bound references. Required obligations cannot be satisfied by unrelated successful checks. Findings and policy-authorized human waivers are explicit records, not evidence fabricated to make a task green.
+Evidence connects to verifiers/tasks/Slices/Program Design/Architecture/ACs/Requirements/Product intent through structured exact-bound references under [ADR-012](012-canonical-planning-ontology.md). Slice-level evidence remains immutable and task/attempt-bound; exact current selected observations must cover the Slice's verifier/predicate/checkpoint obligations. Required obligations cannot be satisfied by unrelated successful checks. Findings and policy-authorized human waivers are explicit records, not evidence fabricated to make a task green.
 
 A completion transaction rechecks applicable evidence and required policies against current authoritative state and a valid current workspace observation. Workspace drift or relevant Spec changes invalidate completion applicability; history remains inspectable. Authoritative metadata CAS alone does not freeze an externally mutable workspace, so provider execution coordination must support the claimed observation boundary.
 

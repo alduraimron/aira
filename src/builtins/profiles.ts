@@ -7,7 +7,7 @@ import { behavioralRoleSchema, behavioralSelectionsSchema } from "./roles";
 
 const profileSelections = behavioralSelectionsSchema.refine((ps) => ps.every((p) => !["spec-kind-profile", "mode-profile"].includes(p.role)), "recursive-profile-selection-forbidden");
 export const specKindProfileSchema = z.strictObject({
-  schema: z.literal("aira.dev/spec-kind-profile/v1"),
+  schema: z.literal("aira.dev/spec-kind-profile/v2"),
   asset: behavioralAssetReferenceSchema.refine((a) => a.kind === "spec-kind-profile", "spec-kind-asset-required"),
   kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
   selections: profileSelections.refine((ps) => ps.length > 0, "behavioral-profile-must-select-behavior"),
@@ -15,9 +15,9 @@ export const specKindProfileSchema = z.strictObject({
 }).refine((p) => (p.kind === "custom") === (p.custom_kind !== undefined) &&
   p.required_roles.every((r) => p.selections.some((s) => s.role === r)), "invalid-spec-kind-profile");
 export const modeProfileSchema = z.strictObject({
-  schema: z.literal("aira.dev/mode-profile/v1"),
+  schema: z.literal("aira.dev/mode-profile/v2"),
   asset: behavioralAssetReferenceSchema.refine((a) => a.kind === "mode-profile", "mode-asset-required"),
-  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "design-first"]),
+  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "architecture-first"]),
   approval_presentation: z.enum(["per-artifact", "integrated"]),
   review_presentation: z.enum(["phase-specific", "integrated-with-canonical-analyses"]),
   selections: profileSelections,

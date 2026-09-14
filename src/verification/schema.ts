@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { acceptanceCriterionIdSchema, artifactRevisionIdSchema, attemptIdSchema, evidenceIdSchema, requirementIdSchema, specIdSchema, taskIdSchema, verifierIdSchema } from "../spec/domain/ids";
+import { acceptanceCriterionIdSchema, artifactRevisionIdSchema, attemptIdSchema, evidenceIdSchema, requirementIdSchema, specIdSchema, taskIdSchema, verifierIdSchema, sliceIdSchema } from "../spec/domain/ids";
 import { approvedSpecSnapshotSchema } from "../spec/domain/artifacts";
 import { blobReferenceSchema, contentHashSchema, nonBlankSchema, policyReferenceSchema, profileReferenceSchema, timestampSchema, unique } from "../spec/domain/primitives";
 import { exactPathSchema } from "../context/declarations";
@@ -12,8 +12,8 @@ import { pinsPolicy, pinsProfile } from "../builtins/bindings";
 
 export const verifierReferenceSchema = z.strictObject({ id: verifierIdSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema });
 export const verifierDefinitionSchema = z.strictObject({
-  schema: z.literal("aira.dev/verifier/v1"), identity: verifierReferenceSchema, title: nonBlankSchema,
-  requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema), tasks: z.array(taskIdSchema),
+  schema: z.literal("aira.dev/verifier/v2"), identity: verifierReferenceSchema, title: nonBlankSchema,
+  requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema), tasks: z.array(taskIdSchema), slices: z.array(sliceIdSchema),
   policy: policyReferenceSchema, recovery: z.array(recoveryDeclarationSchema), required_backend: z.array(backendCapabilitySchema),
   definition: z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("command"), executable: nonBlankSchema, arguments: z.array(z.string()), execution_profile: profileReferenceSchema }),
@@ -26,10 +26,10 @@ export const verifierDefinitionSchema = z.strictObject({
     z.strictObject({ kind: z.literal("external"), provider: profileReferenceSchema, contract: nonBlankSchema }),
     z.strictObject({ kind: z.literal("custom"), contract: profileReferenceSchema, configuration: z.record(nonBlankSchema, z.json()) }),
   ]),
-}).refine((v) => [v.requirements, v.acceptance_criteria, v.tasks, v.required_backend].every(unique) &&
+}).refine((v) => [v.requirements, v.acceptance_criteria, v.tasks, v.slices, v.required_backend].every(unique) &&
   v.acceptance_criteria.every((a) => v.requirements.some((r) => a.startsWith(`${r}.`))), "invalid-verifier-mappings");
 export const verificationPlanSchema = z.strictObject({
-  schema: z.literal("aira.dev/verification-plan/v1"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
+  schema: z.literal("aira.dev/verification-plan/v2"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
   profile: profileReferenceSchema, verifiers: z.array(verifierDefinitionSchema), required_verifiers: z.array(verifierIdSchema),
   final_consistency_review: verifierIdSchema.optional(),
 }).refine((p) => unique(p.verifiers.map((v) => v.identity.id)) && unique(p.required_verifiers) &&
@@ -40,7 +40,7 @@ export const evidenceApplicabilityContractSchema = z.strictObject({
   schema: z.literal("aira.dev/evidence-applicability/exact-workspace/v1"),
 });
 export const verificationEvidenceSchema = z.strictObject({
-  schema: z.literal("aira.dev/evidence/v1"), id: evidenceIdSchema, spec_id: specIdSchema,
+  schema: z.literal("aira.dev/evidence/v2"), id: evidenceIdSchema, spec_id: specIdSchema,
   verifier: verifierReferenceSchema, profile: profileReferenceSchema, snapshot: approvedSpecSnapshotSchema,
   task: taskDefinitionReferenceSchema, attempt: attemptIdSchema,
   workspace_before: workspaceFingerprintSchema, workspace_after: workspaceFingerprintSchema,
@@ -49,12 +49,12 @@ export const verificationEvidenceSchema = z.strictObject({
   behavioral_assets: behavioralPinsSchema,
   started_at: timestampSchema, ended_at: timestampSchema, outcome: evidenceOutcomeSchema,
   outputs: z.array(blobReferenceSchema),
-  requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema),
+  requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema), slices: z.array(sliceIdSchema),
   applicability: evidenceApplicabilityContractSchema,
   review_actor: z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("human"), id: nonBlankSchema }),
     z.strictObject({ kind: z.literal("agent"), implementation: profileReferenceSchema }),
   ]).optional(),
 }).refine((e) => e.snapshot.spec_id === e.spec_id && Date.parse(e.ended_at) >= Date.parse(e.started_at) &&
-  unique(e.requirements) && unique(e.acceptance_criteria) && unique(e.context.map((c) => c.id)) &&
+  unique(e.requirements) && unique(e.acceptance_criteria) && unique(e.slices) && unique(e.context.map((c) => c.id)) &&
   pinsProfile(e.behavioral_assets, "verification-profile", e.profile) && pinsPolicy(e.behavioral_assets, e.policy), "invalid-evidence-binding");

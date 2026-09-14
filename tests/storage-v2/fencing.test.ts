@@ -10,15 +10,15 @@ async function claimedFixture() {
   const x = await created(); clean.push(x.cleanup); const request = withRun(x.result);
   const bound = await x.store.commit(request.transaction, request.blobs);
   const t = mutation(bound, "operation_synthetic_claim", "unused", true), base = t.state.runs[0]!;
-  const tasks = request.records.find((r) => r.schema === "aira.dev/tasks/v1");
-  if (!tasks || tasks.schema !== "aira.dev/tasks/v1") throw Error("fixture tasks");
+  const tasks = request.records.find((r) => r.schema === "aira.dev/tasks/v2");
+  if (!tasks || tasks.schema !== "aira.dev/tasks/v2") throw Error("fixture tasks");
   const definition = tasks.tasks[0]!.identity;
   const fence = { run: base.id, claim: "claim_one", attempt: "attempt_pending", owner: "test-owner", epoch: "1" };
   t.mutation = { kind: "run", spec: false, runs: [base.id], reason: "Persist synthetic future claim contract, not a scheduler" };
   t.state.runs[0] = executionRunSchema.parse({ ...base, commit_sequence: "3", generation: "1",
     tasks: [{ schema: "aira.dev/task-state/v1", task: definition, run: base.id, run_generation: "1", status: "claimed",
       current_attempt: fence.attempt, claim: fence.claim, updated_at: at }],
-    claims: [{ schema: "aira.dev/task-claim/v1", id: fence.claim, task: definition, run: base.id, attempt: fence.attempt,
+    claims: [{ schema: "aira.dev/task-claim/v2", id: fence.claim, task: definition, run: base.id, attempt: fence.attempt,
       owner: fence.owner, generation: "1", fence, snapshot: base.snapshot, status: "active",
       lease: { issued_at: at, expires_at: "2026-08-26T13:00:00.000Z" } }] });
   const current = await x.store.commit(t), next = mutation(current, "operation_check", "unused", true);

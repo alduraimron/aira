@@ -18,8 +18,8 @@ export const behavioralResolutionDecisionSchema = z.strictObject({
   d.strategy === (d.role === "capability-profile" ? "restrict-all" : "replace") &&
   exact(d.effective, d.role === "capability-profile" ? distinctCapabilityPins(d.candidates.map((c) => c.pin)) : [d.candidates.at(-1)!.pin]), "invalid-behavioral-resolution-decision");
 export const behavioralResolutionSchema = z.strictObject({
-  schema: z.literal("aira.dev/behavioral-resolution/v1"), kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
-  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "design-first"]),
+  schema: z.literal("aira.dev/behavioral-resolution/v2"), kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
+  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "architecture-first"]),
   required_roles: z.array(behavioralRoleSchema).min(1).refine(unique),
   decisions: z.array(behavioralResolutionDecisionSchema).min(1),
 }).refine((r) => (r.kind === "custom") === (r.custom_kind !== undefined) && (r.mode === "quick" || r.mode === r.authoring_order) &&
@@ -28,8 +28,8 @@ export type BehavioralResolution = DeepReadonly<z.infer<typeof behavioralResolut
 export const effectiveBehavioralPins = (resolution: BehavioralResolution): readonly BehavioralAssetPin[] => resolution.decisions.flatMap((d) => d.effective);
 const plainSelections = behavioralSelectionsSchema.refine((ps) => ps.every((p) => !["spec-kind-profile", "mode-profile"].includes(p.role)), "use-typed-profile-selection");
 export const behavioralResolutionRequestSchema = z.strictObject({
-  schema: z.literal("aira.dev/behavioral-resolution-request/v1"), kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
-  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "design-first"]),
+  schema: z.literal("aira.dev/behavioral-resolution-request/v2"), kind: specKindSchema, custom_kind: nonBlankSchema.optional(),
+  mode: specModeSchema, authoring_order: z.enum(["requirements-first", "architecture-first"]),
   required_roles: z.array(behavioralRoleSchema).min(1).refine(unique),
   bundle: builtinBundleReferenceSchema.optional(),
   spec_kind: behavioralAssetPinSchema.refine((p) => p.role === "spec-kind-profile").optional(),
@@ -58,8 +58,8 @@ export function resolveBehavioralProfiles(request: BehavioralResolutionRequest, 
   const modePin: BehavioralAssetPin | undefined = request.mode_profile ?? (modeDefault && { role: "mode-profile", asset: modeDefault.asset, bundle: bundle!.manifest.identity });
   const kindConfiguration = kindPin && catalog.assets.find((a) => exact(a.revision.identity, kindPin.asset))?.configuration;
   const modeConfiguration = modePin && catalog.assets.find((a) => exact(a.revision.identity, modePin.asset))?.configuration;
-  const kind = kindConfiguration?.schema === "aira.dev/spec-kind-profile/v1" ? kindConfiguration : undefined;
-  const mode = modeConfiguration?.schema === "aira.dev/mode-profile/v1" ? modeConfiguration : undefined;
+  const kind = kindConfiguration?.schema === "aira.dev/spec-kind-profile/v2" ? kindConfiguration : undefined;
+  const mode = modeConfiguration?.schema === "aira.dev/mode-profile/v2" ? modeConfiguration : undefined;
   if (kindPin && (!kind || kind.kind !== request.kind || kind.custom_kind !== request.custom_kind)) issues.push({ code: "spec-kind-profile-mismatch" });
   if (modePin && (!mode || mode.mode !== request.mode || mode.authoring_order !== request.authoring_order)) issues.push({ code: "mode-profile-lifecycle-mismatch" });
   const layers = [
@@ -89,7 +89,7 @@ export function resolveBehavioralProfiles(request: BehavioralResolutionRequest, 
   if (bundle) issues.push(...evaluateAssetCompatibility(bundle.manifest.compatibility, environment,
     effective.flatMap((p) => catalog.assets.find((a) => assetKey(a.revision.identity) === assetKey(p.asset))?.revision.compatibility.provided_interfaces ?? [])));
   if (issues.length) return { ok: false, issues: stableIssues(issues) };
-  const resolution = behavioralResolutionSchema.safeParse({ schema: "aira.dev/behavioral-resolution/v1", kind: request.kind,
+  const resolution = behavioralResolutionSchema.safeParse({ schema: "aira.dev/behavioral-resolution/v2", kind: request.kind,
     ...(request.custom_kind === undefined ? {} : { custom_kind: request.custom_kind }), mode: request.mode, authoring_order: request.authoring_order,
     required_roles: roles, decisions });
   return resolution.success ? { ok: true, value: resolution.data } : { ok: false, issues: [{ code: "invalid-behavioral-resolution" }] };

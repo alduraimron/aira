@@ -8,15 +8,15 @@ import { fixture, hash, artifact } from "./fixtures";
 const codes = (f: ReturnType<typeof fixture>) => evaluateSpecCompletion(f).blockers.map((b) => b.code);
 
 describe("INV-COMPLETE-001: deterministic completion", () => {
-  test.each(["requirements-first", "design-first", "quick"] as const)("complete exact current Spec in %s mode", (mode) => {
+  test.each(["requirements-first", "architecture-first", "quick"] as const)("complete exact current Spec in %s mode", (mode) => {
     const f = fixture(mode);
     const result = evaluateSpecCompletion(f);
     expect(result.blockers).toEqual([]);
     expect(result.complete).toBe(true);
     expect(evaluateCompletionTransition(f)).toMatchObject({ allowed: true, lifecycle: { state: "completed" } });
   });
-  test("quick integrated approval also completes design-first provenance", () => {
-    expect(evaluateSpecCompletion(fixture("quick", "design-first")).blockers).toEqual([]);
+  test("quick integrated approval also completes architecture-first provenance", () => {
+    expect(evaluateSpecCompletion(fixture("quick", "architecture-first")).blockers).toEqual([]);
   });
   test("stable report under reordered historical records and no caller mutation", () => {
     const f = fixture(), before = JSON.stringify(f);
@@ -28,7 +28,7 @@ describe("INV-COMPLETE-001: deterministic completion", () => {
     const f = fixture(); f.spec.approval_applicability = [];
     expect(codes(f)).toContain("artifact-approval-missing");
   });
-  test("upstream change stales design and tasks transitively", () => {
+  test("upstream change stales architecture and tasks transitively", () => {
     const f = fixture(); const r2 = artifact("requirements", "r2", [referenceOf(f.intent)], 22);
     f.review.revisions.push(r2); f.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")!.artifact = referenceOf(r2);
     expect(codes(f)).toContain("artifact-stale");
@@ -36,7 +36,7 @@ describe("INV-COMPLETE-001: deterministic completion", () => {
   });
   test("unresolved blocker", () => {
     const f = fixture(); f.review.analyses[0]!.findings.push(analysisFindingSchema.parse({ id: "finding_one", category: "security", severity: "blocker", title: "Authorization", description: "Missing authorization",
-      subjects: [referenceOf(f.req)], disposition: { state: "unresolved" } }));
+      subjects: [referenceOf(f.req)], targets: [{ kind: "requirement", id: "R1", artifact: referenceOf(f.req) }], disposition: { state: "unresolved" } }));
     expect(codes(f)).toContain("unresolved-blocker");
   });
   test.each(["pending", "ready", "failed", "interrupted", "skipped", "cancelled", "unknown"] as const)("required task %s cannot complete", (status) => {

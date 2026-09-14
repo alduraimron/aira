@@ -23,23 +23,23 @@ export function available(p: BehavioralAssetPin, configuration?: ReturnType<type
   return availableBehavioralAssetSchema.parse({ revision: r, verified_content_hash: p.asset.hash, ...(configuration ? { configuration } : {}) });
 }
 export function library() {
-  const roles: BehavioralRole[] = ["clarification", "requirements-generation", "requirements-analysis", "design-generation", "design-analysis", "task-generation", "task-analysis",
+  const roles: BehavioralRole[] = ["product-generation", "product-analysis", "program-design-generation", "program-design-analysis", "slice-plan-generation", "slice-plan-analysis", "clarification", "requirements-generation", "requirements-analysis", "architecture-generation", "architecture-analysis", "task-generation", "task-analysis",
     "implementation", "repair", "implementation-review", "verification-review", "final-spec-review", "context-profile", "capability-profile", "verification-profile", "execution-profile", "execution-recipe", "host-skill"];
   const defaults = roles.map((role) => pin(role));
   const special = ["feature", "bugfix", "refactor", "migration", "custom"] as const;
   const specialized = special.map((k) => pin("requirements-analysis", "1", `${k}.requirements-analysis`));
-  const kinds = special.map((kind, i) => specKindProfileSchema.parse({ schema: "aira.dev/spec-kind-profile/v1", asset: pin("spec-kind-profile", "1", `spec.${kind}`).asset,
+  const kinds = special.map((kind, i) => specKindProfileSchema.parse({ schema: "aira.dev/spec-kind-profile/v2", asset: pin("spec-kind-profile", "1", `spec.${kind}`).asset,
     kind, ...(kind === "custom" ? { custom_kind: "audit" } : {}), selections: [specialized[i]], required_roles: ["requirements-analysis"] }));
-  const modes = (["requirements-first", "design-first", "quick"] as const).map((mode) => modeProfileSchema.parse({ schema: "aira.dev/mode-profile/v1", asset: pin("mode-profile", "1", `mode.${mode}`).asset,
-    mode, authoring_order: mode === "design-first" ? "design-first" : "requirements-first",
+  const modes = (["requirements-first", "architecture-first", "quick"] as const).map((mode) => modeProfileSchema.parse({ schema: "aira.dev/mode-profile/v2", asset: pin("mode-profile", "1", `mode.${mode}`).asset,
+    mode, authoring_order: mode === "architecture-first" ? "architecture-first" : "requirements-first",
     approval_presentation: mode === "quick" ? "integrated" : "per-artifact", review_presentation: mode === "quick" ? "integrated-with-canonical-analyses" : "phase-specific", selections: [] }));
   const assets = [...defaults.map((p) => available(p)), ...specialized.map((p) => available(p)),
     ...kinds.map((k) => available({ role: "spec-kind-profile", asset: k.asset }, k)), ...modes.map((m) => available({ role: "mode-profile", asset: m.asset }, m))];
-  const bundle = builtinBundleManifestSchema.parse({ schema: "aira.dev/builtin-bundle/v1", identity: { id: "bundle.aira.test", revision: "1", hash: hash(500) }, distribution_version: "2.0.0-test",
+  const bundle = builtinBundleManifestSchema.parse({ schema: "aira.dev/builtin-bundle/v2", identity: { id: "bundle.aira.test", revision: "1", hash: hash(500) }, distribution_version: "2.0.0-test",
     compatibility: syntheticCompatibility, assets: assets.map((a) => a.revision.identity), defaults,
     spec_kinds: kinds.map((k) => ({ kind: k.kind, ...(k.custom_kind ? { custom_kind: k.custom_kind } : {}), asset: k.asset })), modes: modes.map((m) => ({ mode: m.mode, asset: m.asset })) });
   const catalog = behavioralAssetCatalogSchema.parse({ assets, bundles: [{ manifest: bundle, verified_content_hash: bundle.identity.hash }] });
-  const request = behavioralResolutionRequestSchema.parse({ schema: "aira.dev/behavioral-resolution-request/v1", kind: "feature", mode: "requirements-first", authoring_order: "requirements-first",
+  const request = behavioralResolutionRequestSchema.parse({ schema: "aira.dev/behavioral-resolution-request/v2", kind: "feature", mode: "requirements-first", authoring_order: "requirements-first",
     required_roles: ["requirements-generation", "requirements-analysis"], bundle: bundle.identity, spec: [], task: [] });
   return { defaults, specialized, kinds, modes, bundle, catalog, request, environment: syntheticEnvironment() };
 }

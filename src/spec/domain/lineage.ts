@@ -2,7 +2,7 @@ import { referenceOf, sameArtifact, type ArtifactReference, type ArtifactRevisio
   type ValidationRecord, type ArtifactInvalidation } from "./artifacts";
 import type { Analysis } from "./analysis";
 import type { SpecGeneration } from "./generations";
-import { compareText, cyclicComponents, stableIssues, type DomainIssue } from "./primitives";
+import { compareText, cyclicComponents, stableIssues, type DomainIssue, type ContentHash } from "./primitives";
 
 export interface LineageContext {
   readonly revisions: readonly ArtifactRevision[];
@@ -12,6 +12,8 @@ export interface LineageContext {
   readonly invalidations: readonly ArtifactInvalidation[];
   readonly analyses: readonly Analysis[];
   readonly generation: SpecGeneration;
+  /** Measured canonical semantic-entity bodies, supplied by an authenticating adapter. */
+  readonly entities?: readonly { readonly artifact: ArtifactReference; readonly entities: readonly { readonly id: string; readonly hash: ContentHash }[] }[];
 }
 const exists = (context: LineageContext, ref: ArtifactReference): boolean =>
   context.revisions.some((r) => sameArtifact(referenceOf(r), ref));
@@ -33,6 +35,8 @@ export function currentLineageValidity(context: LineageContext): DomainIssue[] {
     if (edges.has(revision.id)) issues.push({ code: "duplicate-artifact-revision", subject: revision.id });
     edges.set(revision.id, [...new Set([...(edges.get(revision.id) ?? []), ...revision.lineage.map((e) => e.target.revision)])]);
     for (const edge of revision.lineage) {
+      if (edge.relation === "derived_from" && edge.scope && !scopeMatches(context, edge.target, edge.scope))
+        issues.push({ code: "lineage-entity-scope-unverified", subject: revision.id, related: [edge.target.revision] });
       if (!exists(context, edge.target)) issues.push({ code: "unknown-lineage-reference", subject: revision.id, related: [edge.target.revision] });
       const parent = context.revisions.find((r) => r.id === edge.target.revision);
       if (parent && parent.spec_id !== revision.spec_id) issues.push({ code: "cross-spec-lineage", subject: revision.id });
@@ -72,16 +76,23 @@ export function currentLineageValidity(context: LineageContext): DomainIssue[] {
 
 /** Current effective freshness dependencies, with explicit exact-bound revalidation overrides.
  * Same-kind predecessor provenance is historical, not a demand to keep the predecessor current.
- * Applicability may contain design-first mutual consistency cycles; a monotone fixed point
+ * Applicability may contain architecture-first mutual consistency cycles; a monotone fixed point
  * propagates invalidity without mistaking those for derivation cycles (INV-LINEAGE-001/002).
  */
+function scopeMatches(context: LineageContext, artifact: ArtifactReference, scope: readonly { readonly id: string; readonly hash: ContentHash }[]): boolean {
+  const observations = context.entities?.filter((o) => sameArtifact(o.artifact, artifact)) ?? [];
+  return observations.length === 1 && scope.every((s) => observations[0]!.entities.filter((e) => e.id === s.id && e.hash === s.hash).length === 1);
+}
 function effectiveDependencies(context: LineageContext, revision: ArtifactRevision): ArtifactReference[] {
   const validations = context.validations.filter((v) => sameArtifact(v.subject, referenceOf(revision)) && validationUsable(context, v));
   const dependencies: ArtifactReference[] = [];
   for (const edge of revision.lineage) {
     if (edge.relation === "supersedes" || edge.target.kind === revision.kind) continue;
     const replacement = validations.flatMap((v) => v.against).find((r) => r.kind === edge.target.kind);
-    dependencies.push(replacement ?? edge.target);
+    const current = context.current.find((r) => r.kind === edge.target.kind);
+    const scoped = edge.relation === "derived_from" && edge.scope && current &&
+      scopeMatches(context, edge.target, edge.scope) && scopeMatches(context, current, edge.scope) ? current : undefined;
+    dependencies.push(replacement ?? scoped ?? edge.target);
   }
   for (const v of validations) dependencies.push(...v.against, v.analysis);
   if (revision.kind === "analysis") dependencies.push(...(context.analyses.find((a) => a.revision === revision.id)?.inputs ?? []));
@@ -115,7 +126,7 @@ export function deriveStaleness(context: LineageContext): StalenessReport {
   // invalidated by its own invalidation wave returning through validated_against.
   // Example: r2 informed by d1 stays reviewable while d1 awaits validation against
   // r2. Other independent causes still invalidate r2. This preserves ADR-004's
-  // requirements-approval-before-design-revalidation ordering without a cycle.
+  // requirements-approval-before-architecture-revalidation ordering without a cycle.
   let changed = true;
   while (changed) {
     changed = false;
@@ -157,6 +168,10 @@ export function downstreamAffectedArtifacts(context: LineageContext, changed: re
   }
   return context.revisions.filter((r) => affected.has(r.id) && !changed.some((c) => c.revision === r.id))
     .map(referenceOf).sort((a, b) => compareText(a.revision, b.revision));
+}
+export function hasApplicableDependency(context: LineageContext, subject: ArtifactReference, parent: ArtifactReference): boolean {
+  const revision = context.revisions.find((r) => sameArtifact(referenceOf(r), subject));
+  return !!revision && effectiveDependencies(context, revision).some((r) => sameArtifact(r, parent));
 }
 export function hasConsistencyBinding(context: LineageContext, subject: ArtifactReference, against: ArtifactReference): boolean {
   return context.validations.some((v) => sameArtifact(v.subject, subject) && v.against.some((r) => sameArtifact(r, against)) && validationUsable(context, v));

@@ -34,7 +34,7 @@ describe("INV-BUILTIN-002/003: deterministic and inspectable exact resolution", 
     expect(behavioralResolutionRequestSchema.safeParse({ ...f.request, task: [pin("mode-profile")] }).success).toBe(false);
   });
   test("kind specializes mode, Spec specializes kind; source ordering is explicit", () => {
-    const f = library(), mode = f.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/mode-profile/v1" && a.configuration.mode === "requirements-first")!;
+    const f = library(), mode = f.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/mode-profile/v2" && a.configuration.mode === "requirements-first")!;
     mode.configuration = modeProfileSchema.parse({ ...mode.configuration, selections: [pin("requirements-analysis")] });
     const decision = resolved(f).decisions.find((d) => d.role === "requirements-analysis")!;
     expect(decision.candidates.map((c) => c.source)).toEqual(["bundle", "mode", "spec-kind"]);
@@ -67,7 +67,7 @@ describe("INV-BUILTIN-002/003: deterministic and inspectable exact resolution", 
   test("profile selection rejects a missing body, mismatched kind, and unknown request version", () => {
     const f = library(); f.request.spec_kind = { role: "spec-kind-profile", asset: f.kinds[1]!.asset };
     expect(resolveBehavioralProfiles(f.request, f.catalog, f.environment).ok).toBe(false);
-    const asset = f.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/spec-kind-profile/v1")!;
+    const asset = f.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/spec-kind-profile/v2")!;
     delete asset.configuration;
     expect(resolveBehavioralProfiles(f.request, f.catalog, f.environment).ok).toBe(false);
     expect(behavioralResolutionRequestSchema.safeParse({ ...f.request, schema: "aira.dev/behavioral-resolution-request/v99" }).success).toBe(false);
@@ -106,8 +106,8 @@ describe("INV-BUILTIN-005: meaningful kind and lifecycle-constrained mode contra
     expect(specKindProfileSchema.safeParse({ ...k, kind: "custom" }).success).toBe(false);
     expect(specKindProfileSchema.safeParse({ ...k, required_roles: ["implementation"] }).success).toBe(false);
   });
-  test.each(["requirements-first", "design-first", "quick"] as const)("%s uses explicit safe configuration", (mode) => {
-    const f = library(); f.request.mode = mode; f.request.authoring_order = mode === "design-first" ? "design-first" : "requirements-first";
+  test.each(["requirements-first", "architecture-first", "quick"] as const)("%s uses explicit safe configuration", (mode) => {
+    const f = library(); f.request.mode = mode; f.request.authoring_order = mode === "architecture-first" ? "architecture-first" : "requirements-first";
     expect(resolved(f).mode).toBe(mode);
     const m = f.modes.find((m) => m.mode === mode)!;
     expect(modeProfileSchema.parse(m)).toEqual(m);
@@ -115,14 +115,14 @@ describe("INV-BUILTIN-005: meaningful kind and lifecycle-constrained mode contra
   });
   test("quick supports either authoring order but never removes canonical analyses or final human approval", () => {
     const m = library().modes.find((m) => m.mode === "quick")!;
-    expect(modeProfileSchema.safeParse({ ...m, authoring_order: "design-first" }).success).toBe(true);
+    expect(modeProfileSchema.safeParse({ ...m, authoring_order: "architecture-first" }).success).toBe(true);
     for (const extra of [{ approval_presentation: "none" }, { approval_presentation: "per-artifact" }, { review_presentation: "skip" }, { skip_analysis: true }, { lifecycle: "ready" }])
       expect(modeProfileSchema.safeParse({ ...m, ...extra }).success).toBe(false);
   });
   test("mode/order mismatch cannot reinterpret an already selected Spec mode", () => {
-    const f = library(); f.request.mode_profile = { role: "mode-profile", asset: f.modes.find((m) => m.mode === "design-first")!.asset };
+    const f = library(); f.request.mode_profile = { role: "mode-profile", asset: f.modes.find((m) => m.mode === "architecture-first")!.asset };
     expect(resolveBehavioralProfiles(f.request, f.catalog, f.environment).ok).toBe(false);
-    expect(modeProfileSchema.safeParse({ ...f.modes[0]!, authoring_order: "design-first" }).success).toBe(false);
+    expect(modeProfileSchema.safeParse({ ...f.modes[0]!, authoring_order: "architecture-first" }).success).toBe(false);
   });
 });
 
@@ -154,9 +154,9 @@ describe("INV-CAP-002/BUILTIN-003: restriction-only behavioral capability select
 describe("structured compatibility, no dependency solver or guessed guarantees", () => {
   test("compatible revision accepts known schemas, runtime abilities, exact backend and interfaces", () => {
     const f = library(), b = backend();
-    const c = assetCompatibilitySchema.parse({ ...syntheticCompatibility, required_schemas: ["aira.dev/tasks/v1"], runtime_capabilities: ["structured-output"],
+    const c = assetCompatibilitySchema.parse({ ...syntheticCompatibility, required_schemas: ["aira.dev/tasks/v2"], runtime_capabilities: ["structured-output"],
       backend_capabilities: ["process_confinement"], backend_implementations: [b.identity], required_interfaces: ["aira.dev/prompt-interface/v1"] });
-    expect(evaluateAssetCompatibility(c, { ...f.environment, supported_schemas: ["aira.dev/tasks/v1"], runtime_capabilities: ["structured-output"], backend: b }, ["aira.dev/prompt-interface/v1"])).toEqual([]);
+    expect(evaluateAssetCompatibility(c, { ...f.environment, supported_schemas: ["aira.dev/tasks/v2"], runtime_capabilities: ["structured-output"], backend: b }, ["aira.dev/prompt-interface/v1"])).toEqual([]);
   });
   test.each(["domain_schemas", "required_schemas", "runtime_capabilities", "backend_capabilities", "backend_implementations", "required_interfaces"])("missing/incompatible %s fails closed", (field) => {
     const f = library();

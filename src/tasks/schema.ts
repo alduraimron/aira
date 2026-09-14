@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { acceptanceCriterionIdSchema, artifactRevisionIdSchema, contextDeclarationIdSchema, designDecisionIdSchema, requirementIdSchema, specIdSchema, taskIdSchema, verifierIdSchema } from "../spec/domain/ids";
+import { acceptanceCriterionIdSchema, artifactRevisionIdSchema, contextDeclarationIdSchema, architectureDecisionIdSchema, programDesignDecisionIdSchema, sliceIdSchema, requirementIdSchema, specIdSchema, taskIdSchema, verifierIdSchema } from "../spec/domain/ids";
 import { artifactReferenceSchema } from "../spec/domain/artifacts";
 import { contentHashSchema, nonBlankSchema, policyReferenceSchema, profileReferenceSchema, safeUnsignedSchema, unique, canonical, cyclicComponents, stableIssues, type DomainIssue } from "../spec/domain/primitives";
 import { contextDeclarationSchema } from "../context/declarations";
@@ -12,11 +12,12 @@ export const completionConditionSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("artifact-published"), artifact: artifactReferenceSchema }),
 ]);
 export const taskDefinitionSchema = z.strictObject({
-  schema: z.literal("aira.dev/task-definition/v1"), identity: taskDefinitionReferenceSchema,
+  schema: z.literal("aira.dev/task-definition/v2"), identity: taskDefinitionReferenceSchema,
   title: nonBlankSchema, kind: z.enum(["implementation", "test", "migration", "configuration", "documentation", "cleanup", "investigation", "custom"]),
   custom_kind: nonBlankSchema.optional(), description: nonBlankSchema, outcome: nonBlankSchema,
   requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema),
-  design_decisions: z.array(designDecisionIdSchema), dependencies: z.array(taskIdSchema),
+  architecture_decisions: z.array(architectureDecisionIdSchema), program_design_decisions: z.array(programDesignDecisionIdSchema),
+  slice: sliceIdSchema, dependencies: z.array(taskIdSchema),
   required: z.boolean(), completion: z.array(completionConditionSchema).min(1), verifiers: z.array(verifierIdSchema),
   context: z.strictObject({ declarations: z.array(contextDeclarationSchema),
     references: z.array(z.strictObject({ id: contextDeclarationIdSchema, revision: artifactRevisionIdSchema, hash: contentHashSchema })) }),
@@ -26,13 +27,13 @@ export const taskDefinitionSchema = z.strictObject({
   scheduling: z.strictObject({ priority: safeUnsignedSchema, estimated_cost: safeUnsignedSchema.optional(),
     exclusive_resources: z.array(nonBlankSchema), labels: z.array(nonBlankSchema) }),
 }).refine((t) => (t.kind === "custom") === (t.custom_kind !== undefined) &&
-  [t.requirements, t.acceptance_criteria, t.design_decisions, t.dependencies, t.verifiers].every(unique) &&
+  [t.requirements, t.acceptance_criteria, t.architecture_decisions, t.program_design_decisions, t.dependencies, t.verifiers].every(unique) &&
   unique([...t.context.declarations, ...t.context.references].map((d) => d.id)) &&
   unique(t.completion.map(canonical)) && unique(t.scheduling.exclusive_resources) && unique(t.scheduling.labels) &&
   t.completion.every((c) => c.kind !== "verification" || t.verifiers.includes(c.verifier)), "invalid-task-definition");
 // The shape-only decoder is used to produce semantic-ID graph diagnostics.
 export const tasksDocumentSchema = z.strictObject({
-  schema: z.literal("aira.dev/tasks/v1"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
+  schema: z.literal("aira.dev/tasks/v2"), spec_id: specIdSchema, revision: artifactRevisionIdSchema,
   ordering: z.literal("priority-then-task-id-codepoint"), tasks: z.array(taskDefinitionSchema).min(1),
 });
 export function taskGraphShapeIssues(tasks: readonly z.infer<typeof taskDefinitionSchema>[]): DomainIssue[] {

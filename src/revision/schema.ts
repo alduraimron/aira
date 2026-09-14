@@ -8,7 +8,7 @@ export const revisionResolutionSchema = z.strictObject({
   attempt: attemptIdSchema.optional(), operation: operationIdSchema,
 });
 const common = {
-  schema: z.literal("aira.dev/revision-request/v1"), id: revisionRequestIdSchema, spec_id: specIdSchema,
+  schema: z.literal("aira.dev/revision-request/v2"), id: revisionRequestIdSchema, spec_id: specIdSchema,
   previous_artifact: artifactReferenceSchema,
   // Validation checks content but never transforms exact human feedback.
   feedback: nonBlankSchema, actor: humanActorSchema, channel: channelSchema.optional(),

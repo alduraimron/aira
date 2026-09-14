@@ -10,9 +10,12 @@ import { encodeRecord, hashCanonical } from "../../src/storage/file/canonical-js
 import { artifactLineageHash, recordBody } from "../../src/storage/file/records";
 import { mutation, metadata, raw, structured, at } from "./fixtures";
 import type { DomainRecord } from "../../src/storage/records";
+import { planningKinds } from "../../src/spec/domain/planning-kinds";
+import { planningEntities, type PlanningDocument } from "../../src/spec/domain/planning-integrity";
+import { identityRegistrySchema } from "../../src/spec/domain/ids";
 
 /** Actual measured synthetic bytes. No production prompt/skill content. */
-export function withRun(snapshot: StoreSnapshot) {
+export function withRun(snapshot: StoreSnapshot, alter: (document: DomainRecord) => DomainRecord = (document) => document) {
   const t = mutation(snapshot, "operation_start_run"), blobs: BlobInput[] = [], records: DomainRecord[] = [];
   const pins = baseBehavioralPins().map((pin) => {
     const content = raw(`\0synthetic binary asset ${pin.role}\xff`); blobs.push(content);
@@ -44,33 +47,44 @@ export function withRun(snapshot: StoreSnapshot) {
   const verify = pins.find((p) => p.role === "verification-profile")!.asset;
   if (!("policy" in policy) || !("profile" in execute) || !("profile" in verify)) throw Error("fixture pin shape");
   const base = fixture(), revisions: ReturnType<typeof artifactRevisionSchema.parse>[] = [];
-  function artifact(document: DomainRecord, kind: "requirements" | "design" | "tasks") {
+  function artifact(document: DomainRecord, kind: "product" | "requirements" | "architecture" | "program-design" | "slice-plan" | "tasks" | "verification-plan") {
+    document = alter(document);
     if (!("revision" in document)) throw Error("fixture revision missing");
     const blob = encodeRecord(document);
-    const revision = artifactRevisionSchema.parse({ schema: "aira.dev/artifact-revision/v1", id: document.revision, spec_id: snapshot.head.spec_id, kind,
+    const revision = artifactRevisionSchema.parse({ schema: "aira.dev/artifact-revision/v2", id: document.revision, spec_id: snapshot.head.spec_id, kind,
       content: { hash: blob.reference.hash, bytes: blob.bytes.length, media_type: "application/json" }, created: metadata,
       lineage: revisions.map((r) => ({ relation: "derived_from", target: referenceOf(r) })) });
     revisions.push(revision); records.push(document, revision); return revision;
   }
-  const req = artifact(base.requirements, "requirements"); artifact(base.design, "design");
+  artifact(base.product, "product");
+  const req = artifact(base.requirements, "requirements"); artifact(base.architecture, "architecture");
+  artifact(base.program_design, "program-design"); artifact(base.slices, "slice-plan");
   const definition = taskDefinitionSchema.parse({ ...task(), capability_policy: policy.policy, execution_profile: execute.profile,
-    completion: [{ kind: "artifact-published", artifact: referenceOf(req) }], verifiers: [], context: { declarations: [], references: [] } });
+    completion: [{ kind: "artifact-published", artifact: referenceOf(req) }], verifiers: ["V1"], context: { declarations: [], references: [] } });
   definition.identity.hash = hashCanonical(recordBody(definition)); blobs.push(structured(recordBody(definition)));
   artifact(tasksSchema.parse({ ...base.tasks, tasks: [definition] }), "tasks");
+  const verification = { ...base.plan, profile: verify.profile, verifiers: base.plan.verifiers.map((v) => ({ ...v, policy: policy.policy, recovery: [],
+    definition: { kind: "command" as const, executable: "bun", arguments: ["test"], execution_profile: execute.profile } })) };
+  for (const verifier of verification.verifiers) {
+    verifier.identity.hash = hashCanonical(recordBody(verifier)); blobs.push(structured(recordBody(verifier)));
+  }
+  artifact(verification, "verification-plan");
   const subjects = revisions.map((r) => ({ artifact: referenceOf(r), lineage_hash: artifactLineageHash(r) }));
-  const approval = specApprovalRecordSchema.parse({ schema: "aira.dev/spec-approval/v1", id: "approval_run", spec_id: snapshot.head.spec_id,
-    operation: t.operation, actor: metadata.by, observed_generation: "0", committed_generation: "1", subjects, decision: "approved", scope: "integrated", integrated_group: t.operation, at });
+  const approval = specApprovalRecordSchema.parse({ schema: "aira.dev/spec-approval/v2", id: "approval_run", spec_id: snapshot.head.spec_id,
+    operation: t.operation, actor: metadata.by, observed_generation: "0", committed_generation: "1", subjects: subjects.filter((s) => planningKinds.some((k) => k === s.artifact.kind)), decision: "approved", scope: "integrated", integrated_group: t.operation, at });
   records.push(approval);
-  const approved = approvedSpecSnapshotSchema.parse({ schema: "aira.dev/approved-spec-snapshot/v1", spec_id: snapshot.head.spec_id, generation: "1", artifacts: subjects,
+  const approved = approvedSpecSnapshotSchema.parse({ schema: "aira.dev/approved-spec-snapshot/v2", spec_id: snapshot.head.spec_id, generation: "1", artifacts: subjects,
     approvals: [approval.id], decision_policy: t.state.spec.decision_policy.identity, completion_policy: t.state.spec.completion_policy.identity,
     verification_profile: verify.profile, capability_policies: [policy.policy], behavioral_profiles: [], behavioral_assets: pins });
-  const run = executionRunSchema.parse({ schema: "aira.dev/execution-run/v1", id: "run_one", commit_sequence: "2", generation: "0", snapshot: approved,
-    status: "pending", scheduling: { max_parallel: 1, ordering: "priority-then-task-id-codepoint" }, tasks: [], claims: [], attempts: [], authorities: [],
+  const run = executionRunSchema.parse({ schema: "aira.dev/execution-run/v2", id: "run_one", commit_sequence: "2", generation: "0", snapshot: approved,
+    status: "pending", scheduling: { max_parallel: 1, ordering: "priority-then-task-id-codepoint" }, slices: [], tasks: [], claims: [], attempts: [], authorities: [],
     current_evidence: [], created_at: at, updated_at: at });
   const encoded = records.map(encodeRecord); blobs.push(...encoded.map((r) => ({ hash: r.reference.hash, bytes: r.bytes })));
   const transaction = transactionSchema.parse({ ...t, mutation: { ...t.mutation, kind: "spec-and-run", runs: [run.id] }, state: {
     ...t.state, runs: [run], records: encoded.map((r) => r.reference), behavioral_environment: syntheticEnvironment(),
-    spec: { ...t.state.spec, mode: "quick", artifacts: { current: subjects, proposed: [], superseded: [] }, approvals: [approval.id],
+    spec: { ...t.state.spec, mode: "quick", identities: identityRegistrySchema.parse({ schema: "aira.dev/identity-registry/v2",
+      entries: records.filter((r) => "revision" in r && (r.schema === "aira.dev/verification-plan/v2" || planningKinds.some((k) => r.schema.startsWith(`aira.dev/${k}/`)))).flatMap((r) =>
+        planningEntities(r as PlanningDocument).map((e) => ({ id: e.id, introduced_in: (r as PlanningDocument).revision }))) }), artifacts: { current: subjects, proposed: [], superseded: [] }, approvals: [approval.id],
       run_binding: { run: run.id, snapshot: approved, applicable_generation: "1", status: "applicable" } },
   } });
   return { transaction, blobs, records, run };

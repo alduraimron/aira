@@ -25,7 +25,7 @@ describe("INV-BUILTIN-001: logical identity and immutable revision/hash", () => 
     expect(validateAssetRevisionHistory([r1, r1]).map((i) => i.code)).toContain("duplicate-asset-revision");
     expect(validateAssetRevisionHistory([r2]).map((i) => i.code)).toContain("asset-predecessor-unavailable");
     expect(behavioralAssetRevisionSchema.safeParse({ ...r1, supersedes: r2.identity }).success).toBe(false);
-    expect(behavioralAssetRevisionSchema.safeParse({ ...r2, supersedes: pin("design-generation").asset }).success).toBe(false);
+    expect(behavioralAssetRevisionSchema.safeParse({ ...r2, supersedes: pin("architecture-generation").asset }).success).toBe(false);
   });
   test.each(["hash", "metadata", "compatibility", "encoding"])("same revision cannot overwrite %s", (field) => {
     const r = revision();
@@ -89,7 +89,7 @@ describe("INV-BUILTIN-002/003: bundle manifests and exact pins", () => {
     f.catalog.assets = f.catalog.assets.filter((a) => a.revision.identity.id !== f.defaults[0]!.asset.id);
     expect(validateBuiltinBundleContents(f.bundle, f.catalog, f.environment).map((i) => i.code)).toContain("pinned-asset-unavailable");
     const g = library(), p = pin("requirements-analysis", "2"); g.catalog.assets.push(available(p));
-    const configuration = g.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/spec-kind-profile/v1")!.configuration!;
+    const configuration = g.catalog.assets.find((a) => a.configuration?.schema === "aira.dev/spec-kind-profile/v2")!.configuration!;
     configuration.selections = [p];
     expect(validateBuiltinBundleContents(g.bundle, g.catalog, g.environment).map((i) => i.code)).toContain("bundle-profile-selection-not-contained");
     const h = library(); h.bundle.spec_kinds[0]!.asset = h.kinds[1]!.asset;

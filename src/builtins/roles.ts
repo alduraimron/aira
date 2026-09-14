@@ -3,16 +3,22 @@ import { exact, unique, type DeepReadonly } from "../spec/domain/primitives";
 import { behavioralAssetReferenceSchema, type BehavioralAssetKind } from "./assets";
 import { assetKey, builtinBundleReferenceSchema } from "./identity";
 
-export const behavioralRoleSchema = z.enum(["clarification", "requirements-generation", "requirements-analysis", "design-generation", "design-analysis",
+export const planningBehavioralRoles = ["product-generation", "product-analysis", "requirements-generation", "requirements-analysis",
+  "architecture-generation", "architecture-analysis", "program-design-generation", "program-design-analysis",
+  "slice-plan-generation", "slice-plan-analysis", "task-generation", "task-analysis"] as const;
+export const behavioralRoleSchema = z.enum(["product-generation", "product-analysis", "program-design-generation", "program-design-analysis", "slice-plan-generation", "slice-plan-analysis", "clarification", "requirements-generation", "requirements-analysis", "architecture-generation", "architecture-analysis",
   "task-generation", "task-analysis", "implementation", "repair", "implementation-review", "verification-review", "final-spec-review",
   "context-profile", "capability-profile", "verification-profile", "execution-profile", "execution-recipe", "spec-kind-profile", "mode-profile", "host-skill"]);
-export const authoringBehavioralPhaseSchema = z.enum(["clarification", "requirements-generation", "requirements-analysis", "design-generation", "design-analysis",
+export const authoringBehavioralPhaseSchema = z.enum(["product-generation", "product-analysis", "program-design-generation", "program-design-analysis", "slice-plan-generation", "slice-plan-analysis", "clarification", "requirements-generation", "requirements-analysis", "architecture-generation", "architecture-analysis",
   "task-generation", "task-analysis", "final-spec-review"]);
 export type BehavioralRole = z.infer<typeof behavioralRoleSchema>;
 export type AuthoringBehavioralPhase = z.infer<typeof authoringBehavioralPhaseSchema>;
 const roleKinds: Record<BehavioralRole, readonly BehavioralAssetKind[]> = {
+  "product-generation": ["prompt-profile"], "product-analysis": ["analysis-profile"],
+  "program-design-generation": ["prompt-profile"], "program-design-analysis": ["analysis-profile"],
+  "slice-plan-generation": ["prompt-profile"], "slice-plan-analysis": ["analysis-profile"],
   clarification: ["prompt-profile"], "requirements-generation": ["prompt-profile"], "requirements-analysis": ["analysis-profile"],
-  "design-generation": ["prompt-profile"], "design-analysis": ["analysis-profile"], "task-generation": ["prompt-profile"], "task-analysis": ["analysis-profile"],
+  "architecture-generation": ["prompt-profile"], "architecture-analysis": ["analysis-profile"], "task-generation": ["prompt-profile"], "task-analysis": ["analysis-profile"],
   implementation: ["prompt-profile"], repair: ["prompt-profile", "analysis-profile"], "implementation-review": ["analysis-profile"],
   "verification-review": ["analysis-profile"], "final-spec-review": ["analysis-profile"], "context-profile": ["context-profile"],
   "capability-profile": ["capability-policy-profile"], "verification-profile": ["verification-profile"], "execution-profile": ["execution-profile"],

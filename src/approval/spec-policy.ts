@@ -1,5 +1,6 @@
 import { artifactApplicability, type LineageContext } from "../spec/domain/lineage";
 import { sameSubject, type ApprovalApplicability, type HumanWaiver, type SpecApprovalRecord, type SpecDecisionPolicy, type WaiverApplicability } from "./spec-records";
+import { planningKinds } from "../spec/domain/planning-kinds";
 import type { ArtifactSubject } from "../spec/domain/artifacts";
 import type { SpecGeneration } from "../spec/domain/generations";
 import type { SpecId } from "../spec/domain/ids";
@@ -31,9 +32,9 @@ export function approvalApplicability(record: SpecApprovalRecord, subject: Artif
 }
 /** One record is the indivisible quick-mode human operation; no opaque bundle approval. */
 export function integratedApprovalApplicability(record: SpecApprovalRecord, context: DecisionContext): DomainIssue[] {
-  const required = context.subjects.filter((s) => ["requirements", "design", "tasks"].includes(s.artifact.kind));
+  const required = context.subjects.filter((s) => planningKinds.some((k) => k === s.artifact.kind));
   const issues: DomainIssue[] = [];
-  if (record.scope !== "integrated" || required.length !== 3 || record.subjects.length !== 3)
+  if (record.scope !== "integrated" || required.length !== 6 || record.subjects.length !== 6)
     issues.push({ code: "integrated-approval-incomplete", subject: record.id });
   for (const subject of required) issues.push(...approvalApplicability(record, subject, context));
   return stableIssues(issues);

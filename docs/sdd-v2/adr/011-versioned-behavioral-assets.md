@@ -74,7 +74,7 @@ hash. Publication must also use the immutable revision/bundle/history validators
 ### Roles, kinds and modes
 
 A role describes what is needed; a pin describes exactly what satisfies it. Closed roles
-cover clarification; requirements/design/task generation and analysis; implementation;
+cover clarification; Product/Requirements/Architecture/Program Design/Slice Plan/Task generation and analysis (twelve roles); implementation;
 repair; implementation, verification and final Spec review; context, capability,
 verification and execution profiles; execution recipes; kind/mode profiles; and the Host
 skill. Each role has allowed asset kinds. A role mapping is a validated selection list,
@@ -84,14 +84,14 @@ Kind profiles bind their own immutable asset revision, the existing Spec kind an
 behavioral selections/required roles. Feature, bugfix, refactor, migration and explicitly
 named custom kinds are supported. Nonempty selections are required; profiles cannot
 recursively select other kind/mode profiles. Kind is not cosmetic metadata. Later product
-content MUST differentiate feature requirements/design/task planning, bug reproduction,
+content MUST differentiate feature requirements/architecture/task planning, bug reproduction,
 root cause and regression verification, refactor behavior/architecture preservation,
 and migration compatibility windows, rollback and partial-failure handling. Different
 names pointing to one generic minimal behavior do not satisfy release quality.
 
 Mode profiles use the same canonical artifact schemas. They configure authoring order,
 analysis selection and approval/review presentation **within** lifecycle constraints.
-Requirements-first and design-first keep per-artifact presentation and matching order.
+Requirements-first and architecture-first keep per-artifact presentation and matching order.
 Quick supports either authoring order, integrated human approval presentation and an
 integrated view retaining canonical analyses. No profile can disable canonical artifacts,
 analyses, consistency, approvals, traceability, completion rules or fencing. Lifecycle
@@ -155,8 +155,8 @@ made by a TypeScript annotation.
 Choose **phase-specific immutable snapshots**, not one mutable Spec profile. Each
 `BehavioralProfileSnapshot` binds an observed Spec generation, phase, exact identity/hash,
 request and resolved decisions. The Spec carries explicit selections for future behavior
-and an append-only output-revision-to-snapshot binding history. Requirements, design and
-tasks generation and their three analyses can each use different snapshots. Analysis
+and an append-only output-revision-to-snapshot binding history. Product, Requirements, Architecture, Program Design, Slice Plan and Tasks generation
+and their six analyses can each use different snapshots. Analysis
 bindings identify the analysis artifact revision, not just the analyzed document.
 Generated artifact provenance contains its snapshot reference. Human-authored unassisted
 content can have no behavioral input; missing fields never mean to resolve current
@@ -165,8 +165,8 @@ defaults. The Spec still explicitly stores empty selection/history lists in that
 Adopting selections or adding profile bindings is a Spec semantic mutation requiring a
 new Spec generation. Existing bindings and artifact provenance cannot be rewritten.
 Existing lineage/invalidation, approvals and active-run fencing rules still apply to
-relevant mutations. In particular design-first revalidation can use a new analysis
-profile while the unchanged approved design retains its original authoring profile.
+relevant mutations. In particular architecture-first revalidation can use a new analysis
+profile while the unchanged approved architecture retains its original authoring profile.
 Changing future defaults does not reinterpret existing Spec/run pins or automatically
 regenerate history. Snapshot validation replays the recorded exact request against its
 pinned catalog inputs, not the distribution now installed by default.
@@ -203,6 +203,17 @@ for v2 release, not optional polish after a placeholder MVP. A stable user-facin
 capability is not release-complete until both conceptual and reference documentation
 exist, with the required end-to-end examples. This decision records the requirements;
 it does not author that content or assert that those release gates already pass.
+
+## Stage-05B planning evolution
+
+[ADR-012](012-canonical-planning-ontology.md) retires the pre-release generic design roles
+and `design-first`, introduces explicit Architecture/Program Design plus Product/Slice
+roles, and versions affected enclosing profiles/bundles/resolutions/snapshots. Asset IDs,
+revision/content hashes and provenance are never silently relabeled. Kind/mode profiles
+can select differentiated exact assets for all twelve planning activities. No production
+prompts are authored by this stage. The expanded [release checklist](../release-completeness.md)
+remains mandatory. The historical initial implementation account below does not imply
+that affected stage-05B enclosing schemas retain their earlier v1 identifiers.
 
 ## Consequences and compatibility
 

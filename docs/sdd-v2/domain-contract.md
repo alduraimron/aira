@@ -1,9 +1,11 @@
 # SDD v2 pure domain contract
 
-Implementation stage 3 plus the pre-storage behavioral asset contract (ADR-011).
-Stage 4 now persists these unchanged contracts through the separate
-[file storage foundation](storage-contract.md). Statements below about deferred
-storage describe the original pure-domain stage, not the current adapter status.
+Implementation stage 3, ADR-011 behavioral assets, stage-4/5 persistence, and the
+stage-05B [canonical planning model](planning-model.md) under
+[ADR-012](adr/012-canonical-planning-ontology.md). The latter explicitly retires the
+pre-release generic Design ontology and versions affected contracts. The
+[file storage foundation](storage-contract.md) retains its publication protocol.
+References below to deferred adapters do not imply storage is unimplemented.
 
 This document maps the domain implementation to the accepted
 [architecture](architecture.md), [ADRs](architecture.md#adr-index), and
@@ -11,7 +13,7 @@ This document maps the domain implementation to the accepted
 
 ## Boundary and validation
 
-The new modules are additive. Existing runtime barrels, CLI/Core/Pi code, recipe
+The v2-only modules evolve the unreleased domain; generic Design is removed. Existing runtime barrels, CLI/Core/Pi code, recipe
 execution, v1 persistence, approvals, and frozen fixtures are unchanged. New domain
 modules import only TypeScript, Zod, and other pure v2 modules. No store, scheduler,
 worker, filesystem resolver, fingerprint capture, policy interceptor, or sandbox is
@@ -36,19 +38,21 @@ pretend that a TypeScript type implements those storage guarantees.
 
 ## Version and identity conventions
 
-The domain is named **SDD v2**, while each contract starts at its own **schema v1**.
-The convention is `aira.dev/<contract>/v1`. Versions are literal discriminants, never
+The domain is named **SDD v2**, independently of individual contract versions.
+The convention is `aira.dev/<contract>/vN`. New contracts start at v1; affected
+pre-release contracts advance to v2 under the [version inventory](planning-model.md#development-state-incompatibility).
+Versions are literal discriminants, never
 inferred from optional fields. Unknown versions fail closed. Nested value objects are
 versioned by their enclosing contract; independently revisioned/persistable documents
 have explicit schemas. This is unrelated to legacy RunState's numeric `version: 1`.
 
 Contract identifiers introduced:
 
-| Area | Identifiers under `aira.dev/`, each ending in `/v1` |
+| Area | Contract names under `aira.dev/` (versions in the linked inventory; unaffected contracts remain v1) |
 | --- | --- |
 | Spec | `spec`, `intent`, `identity-registry`, `spec-decision-policy`, `spec-completion-policy` |
-| Artifacts | `artifact-revision`, `requirements`, `design`, `analysis`, `lineage-validation`, `artifact-invalidation` |
-| Tasks | `tasks`, `task-definition`, `task-state` |
+| Artifacts | `artifact-revision`, `product`, `requirements`, `architecture`, `program-design`, `slice-plan`, `analysis`, `lineage-validation`, `artifact-invalidation` |
+| Slices and Tasks | `slice-state`, `tasks`, `task-definition`, `task-state` |
 | Human decisions | `spec-approval`, `approval-applicability`, `human-waiver`, `waiver-applicability`, `revision-request` |
 | Execution | `approved-spec-snapshot`, `execution-profile`, `execution-run`, `attempt`, `task-claim`, `transaction-preconditions`, `retry-policy`, `reconciliation` |
 | Context | `context-declaration`, `context-snapshot` |
@@ -65,7 +69,7 @@ workspace/provider state. They are JSON data, not executable extensions or impli
 permission grants.
 
 Human-facing IDs use positive decimal suffixes without leading zeroes:
-`R1`, `R1.AC1`, `D1`, `T1`, `V1`. An AC's requirement prefix must match its owner.
+`O1`, `SC1`, `R1`, `R1.AC1`, `A1`, `PD1`, `S1`, `T1`, `V1`. An AC's requirement prefix must match its owner.
 Except for the behavioral asset identities below, other IDs use `<prefix>_<token>`, where the token matches
 `[a-z0-9][a-z0-9_-]{0,63}`. Prefixes are `spec`, `rev`, `approval`, `revision`,
 `finding`, `run`, `attempt`, `evidence`, `workspace`, `policy`, `snapshot`,
@@ -107,7 +111,7 @@ capability policy. Verifiers retain their existing identity through plans/eviden
 there is no competing built-in policy/verifier identity model.
 
 Role/pin schemas distinguish required behavior from its exact implementation. The closed
-role vocabulary covers clarification, the six authoring generation/analysis activities,
+role vocabulary covers clarification, the twelve authoring generation/analysis activities,
 implementation, repair, implementation/verification/final-spec review, context, capability,
 verification and execution profiles, execution recipe, kind/mode profiles and Host skill.
 Pins contain exact asset revision/hash/provenance and optional exact bundle membership,
@@ -145,14 +149,14 @@ The Spec has mandatory explicit `behavioral_selections` and append-only
 start with empty lists. A generated artifact must reference an immutable profile snapshot;
 absence is never a request to load hidden defaults. Snapshots record phase, observed Spec
 generation, exact request/decisions, identity/hash and creation provenance. Each of the
-six authoring phases can retain a different snapshot. Schema and cross-record validation
+twelve authoring phases can retain a different snapshot. Schema and cross-record validation
 bind analysis phases, output revision/hash, envelope references and snapshot hashes;
 snapshot validation replays only its recorded exact inputs.
 
 Adoption/addition is a semantic generation mutation, checked by
 `validateSpecBehavioralEvolution`. Historical bindings are not removed or rewritten.
-Design-first revalidation may use a new analysis snapshot without rewriting the unchanged
-design's original provenance or fabricating a content approval. Existing invalidation
+Architecture-first revalidation may use a new analysis snapshot without rewriting the unchanged
+architecture's original provenance or fabricating a content approval. Existing invalidation
 and fencing obligations remain authoritative for relevant selection changes.
 
 Approved Spec/run snapshots have mandatory authoring bindings and exact execution pins.
@@ -179,7 +183,7 @@ independent quality tests, user conceptual/reference documentation and end-to-en
 ## Spec, lifecycle, and canonical content
 
 One Spec schema supports feature, bugfix, refactor, migration, and custom kinds, and
-requirements-first, design-first, and quick modes. `authoring_order` distinguishes
+requirements-first, architecture-first, and quick modes. `authoring_order` distinguishes
 ordering from human gate placement; quick can use either authoring order. The Spec
 selects exact current/proposed/superseded artifacts, current analyses, active lineage
 records, approval/waiver applicability, revision request identities, policies, identity
@@ -188,8 +192,11 @@ history, generation, metadata, and an optional exact run binding.
 Lifecycle states:
 
 - `draft`
+- `drafting-product`, `analyzing-product`, `waiting-product-approval`, `product-approved`
+- `drafting-program-design`, `analyzing-program-design`, `waiting-program-design-approval`, `program-design-approved`
+- `drafting-slice-plan`, `analyzing-slice-plan`, `waiting-slice-plan-approval`, `slice-plan-approved`
 - `drafting-requirements`, `analyzing-requirements`, `waiting-requirements-approval`, `requirements-approved`
-- `drafting-design`, `analyzing-design`, `waiting-design-approval`, `design-approved`, `validating-design`
+- `drafting-architecture`, `analyzing-architecture`, `waiting-architecture-approval`, `architecture-approved`, `validating-architecture`
 - `drafting-tasks`, `analyzing-tasks`, `waiting-tasks-approval`, `waiting-integrated-approval`
 - `ready`, `implementing`, `verifying`, `completed`, `cancelled`, `blocked`, `interrupted`
 
@@ -201,22 +208,33 @@ states record their suspended state and reason, and cannot resume at a later gat
 candidate current task artifact. These functions propose decisions without changing
 Spec generation or publishing artifacts.
 
-Requirements contain typed priority/statement/rationale/assumptions/dependencies,
+Product, Architecture, Program Design and Slice contracts and their deterministic
+validators are specified in [planning-model.md](planning-model.md). Product supports
+structured stakeholders, outcomes and success criteria; Program Design records code
+intent and uncertainty; Slices are end-to-end increments with a separate DAG.
+`validateProduct`, `validateRequirementsProduct`, `validateArchitecture`,
+`validateProgramDesign`, `validateSliceDAG`, `validateSliceReferences`,
+`validateTaskSliceConsistency`, `sliceReadiness` and `evaluateSliceCompletion` are pure.
+
+Requirements additionally contain explicit Product Outcome and Success Criterion
+references. MUST functional behavior needs a mapping; technical constraints do not
+need fabricated Product intent. Requirements contain typed priority/statement/rationale/assumptions/dependencies,
 optional measurable targets, and structured acceptance criteria. EARS forms include
 ubiquitous, event-driven, state-driven, unwanted-behavior, optional-feature, and complex;
 freeform criteria retain both expected behavior and fallback text. Markdown is not
 parsed for canonical semantics.
 
-Design decisions have stable IDs, requirement/AC mappings, rationale, alternatives,
+System Architecture decisions have stable IDs, requirement/AC mappings, rationale, alternatives,
 and risks. Optional structured sections cover architecture context, components,
 interfaces, data flow, failure behavior, concurrency, security, compatibility,
-migration, observability, performance, deployment, testing, rollback, and exclusions.
+migration, observability, performance, deployment, rollback, and exclusions.
+Concrete test and symbol/call-path design belongs to the distinct Program Design.
 
 Findings bind analyzed revisions, severity, category, and disposition. Dismissal needs
 human rationale. Resolution records an exact artifact or human answer. Changed
 findings/dispositions belong to new immutable analysis results, not rewritten history.
 Unresolved blockers require an exact, policy-authorized human waiver; warnings alone
-are not blockers. All three canonical authoring analyses remain required in quick mode.
+are not blockers. All six canonical authoring analyses remain required in quick mode.
 
 ## Provenance, staleness, and decisions
 
@@ -229,8 +247,8 @@ not self-hashes over an envelope containing its own hash. Byte encoding/hash cap
 belongs to the later store/adapter contract, not `canonical()` (a comparison helper).
 
 `validated_against` is an exact-bound, analysis-backed applicability record, never
-retroactive derivation. A design-first design can be approved from intent, inform
-requirements, and then be validated against those requirements without a new design
+retroactive derivation. Architecture-first Architecture can be approved from Product, inform
+requirements, and then be validated against those requirements without a new architecture
 revision or redundant content approval.
 
 `currentLineageValidity` checks closed reference integrity and deterministic provenance
@@ -238,14 +256,16 @@ cycle components. `deriveStaleness` uses exact current input identities, current
 revalidation records, explicit invalidations, and a monotone transitive closure.
 Same-kind predecessor provenance is historical: a new revision does not demand its
 predecessor remain current. Revalidation can replace an outdated cross-kind applicability
-input without changing immutable provenance.
+input without changing immutable provenance. Optional stable-entity hash scopes preserve
+fine-grained applicability only with exact measured observations, as specified in the
+planning model. Missing scope observations fail closed; unscoped lineage remains coarse.
 
 Invalidation is causal. A newly current input is not invalidated by its own invalidation
 wave returning through a reverse validation relationship. For example, new requirements
-informed by unchanged design remain reviewable while that design awaits consistency
+informed by unchanged architecture remain reviewable while that architecture awaits consistency
 validation against them. Independent invalidation causes still invalidate those
 requirements. This preserves ADR-004's approval-then-revalidation ordering rather than
-creating a circular applicability prerequisite. Tasks consuming stale design remain
+creating a circular applicability prerequisite. Tasks consuming stale architecture remain
 stale transitively. `downstreamAffectedArtifacts` is the conservative impact set;
 `artifactApplicability` is the authoritative pure current-use predicate.
 
@@ -253,13 +273,13 @@ Approval records retain the human actor, channel, operation, observed generation
 resulting committed generation, exact revision/hash subjects, decision, time, and
 comment. An artifact subject's `lineage_hash` identifies **immutable authoring
 provenance**, not later consistency-analysis results. Current consistency/staleness is
-checked independently. Thus unchanged design may explicitly carry its original content
+checked independently. Thus unchanged architecture may explicitly carry its original content
 approval forward after revalidation, without rewriting what the human approved.
 
 Current approval-applicability records bind a resulting Spec generation and exact
 subject. Later carry-forward is explicit and checked; revocation/supersession never
 changes historical approvals. Run-only bookkeeping does not invalidate review. Quick
-approval is one human operation over exactly requirements/design/tasks, with three
+approval is one human operation over exactly Product/Requirements/Architecture/Program Design/Slice Plan/Tasks, with six
 individual applicability records. Partial sets, changed hashes, missing carry-forward,
 and stale subjects cannot authorize execution.
 
@@ -277,6 +297,12 @@ The resulting revision must supersede the correct predecessor. No workflow step 
 or positional replay is involved.
 
 ## Tasks, execution, and recovery
+
+Every executable Task has exactly one Slice owner, validated against reciprocal Slice
+membership. Cross-Slice Task dependencies must agree with the separate Slice DAG. Slice
+state is embedded in the run independently of Task state and binds an exact Slice Plan.
+A Task is runnable only inside an explicitly active runnable Slice with completed
+predecessor Slices, in addition to the existing gates below.
 
 A task definition includes identity/revision/hash, kind, description/outcome, requiredness,
 requirement/AC/decision references, prerequisite task IDs, completion conditions,
@@ -365,8 +391,10 @@ Evidence remains immutable history when failed, stale, interrupted, or supersede
 Current evidence selections are exact task/verifier/evidence bindings in run state;
 an unrelated or older passing observation cannot mask a selected failure.
 
-Traceability constructs revision-bound structured edges for Requirement -> AC -> Decision
--> Task -> Verifier -> Evidence. Reports expose design/task/verifier coverage, required
+Traceability constructs revision/hash-bound structured edges for Product Outcome ->
+Success Criterion -> Requirement -> AC -> Architecture Decision -> Program Design
+Decision -> Slice -> Task -> Verifier -> Evidence. Product coverage, first observable
+Slice frontiers and missing A/PD/S implementation links are structured reports. Reports expose architecture/task/verifier coverage, required
 verifier subsets, applicable evidence, and missing required obligations. Requirement-level
 decisions cover their ACs unless narrower AC mappings were declared. MUST coverage is
 always enforced; policy can additionally require SHOULD or all priorities. Optional

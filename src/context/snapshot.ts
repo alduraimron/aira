@@ -16,7 +16,7 @@ export const contextSnapshotEntrySchema = z.strictObject({
   source: z.strictObject({ identity: nonBlankSchema, revision: nonBlankSchema, original_hash: contentHashSchema }).optional(),
 }).refine((e) => e.inclusion !== "summary" || e.source !== undefined, "summary-source-required");
 export const contextSnapshotSchema = z.strictObject({
-  schema: z.literal("aira.dev/context-snapshot/v1"), id: contextSnapshotIdSchema,
+  schema: z.literal("aira.dev/context-snapshot/v2"), id: contextSnapshotIdSchema,
   workspace_id: workspaceIdSchema, fingerprint: workspaceFingerprintSchema,
   resolver: profileReferenceSchema, resolver_policy: profileReferenceSchema,
   behavioral_assets: behavioralPinsSchema,

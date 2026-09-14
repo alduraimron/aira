@@ -13,7 +13,9 @@ readable != resumable != imported != convertible
 ```
 
 A workflow run is historical recipe state. Its workflow name, plan files and generic
-`approved` result are not Requirements, Design, Tasks or exact-bound Spec approvals.
+`approved` result are not Product, Requirements, System Architecture, Program Design,
+Vertical Slices, Tasks or exact-bound Spec approvals. Stage 05B does not reinterpret
+v1 `plan.md` or fabricate any part of the new planning ontology.
 The compatibility layer never executes/resumes a v1 run, infers lineage or creates a
 Spec. A future explicit user-driven conversion would create new work with new
 provenance, approvals and evidence, not reinterpret this archive.

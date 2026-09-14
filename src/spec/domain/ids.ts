@@ -4,7 +4,11 @@ import type { DomainIssue } from "./primitives";
 // Human obligation IDs are identities, never indexes or dependency ordering.
 export const requirementIdSchema = z.string().regex(/^R[1-9][0-9]*$/).brand<"RequirementId">();
 export const acceptanceCriterionIdSchema = z.string().regex(/^R[1-9][0-9]*\.AC[1-9][0-9]*$/).brand<"AcceptanceCriterionId">();
-export const designDecisionIdSchema = z.string().regex(/^D[1-9][0-9]*$/).brand<"DesignDecisionId">();
+export const productOutcomeIdSchema = z.string().regex(/^O[1-9][0-9]*$/).brand<"ProductOutcomeId">();
+export const successCriterionIdSchema = z.string().regex(/^SC[1-9][0-9]*$/).brand<"SuccessCriterionId">();
+export const architectureDecisionIdSchema = z.string().regex(/^A[1-9][0-9]*$/).brand<"ArchitectureDecisionId">();
+export const programDesignDecisionIdSchema = z.string().regex(/^PD[1-9][0-9]*$/).brand<"ProgramDesignDecisionId">();
+export const sliceIdSchema = z.string().regex(/^S[1-9][0-9]*$/).brand<"SliceId">();
 export const taskIdSchema = z.string().regex(/^T[1-9][0-9]*$/).brand<"TaskId">();
 export const verifierIdSchema = z.string().regex(/^V[1-9][0-9]*$/).brand<"VerifierId">();
 const opaque = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[a-z0-9][a-z0-9_-]{0,63}$`));
@@ -28,7 +32,11 @@ export const profileIdSchema = opaque("profile").brand<"ProfileId">();
 export type SpecId = z.infer<typeof specIdSchema>;
 export type RequirementId = z.infer<typeof requirementIdSchema>;
 export type AcceptanceCriterionId = z.infer<typeof acceptanceCriterionIdSchema>;
-export type DesignDecisionId = z.infer<typeof designDecisionIdSchema>;
+export type ProductOutcomeId = z.infer<typeof productOutcomeIdSchema>;
+export type SuccessCriterionId = z.infer<typeof successCriterionIdSchema>;
+export type ArchitectureDecisionId = z.infer<typeof architectureDecisionIdSchema>;
+export type ProgramDesignDecisionId = z.infer<typeof programDesignDecisionIdSchema>;
+export type SliceId = z.infer<typeof sliceIdSchema>;
 export type TaskId = z.infer<typeof taskIdSchema>;
 export type VerifierId = z.infer<typeof verifierIdSchema>;
 export type ArtifactRevisionId = z.infer<typeof artifactRevisionIdSchema>;
@@ -45,9 +53,10 @@ export type OperationId = z.infer<typeof operationIdSchema>;
 export type ClaimId = z.infer<typeof claimIdSchema>;
 
 export const stableIdentitySchema = z.union([requirementIdSchema, acceptanceCriterionIdSchema,
-  designDecisionIdSchema, taskIdSchema, verifierIdSchema, analysisFindingIdSchema]);
+  productOutcomeIdSchema, successCriterionIdSchema, architectureDecisionIdSchema, programDesignDecisionIdSchema,
+  sliceIdSchema, taskIdSchema, verifierIdSchema, analysisFindingIdSchema]);
 export const identityRegistrySchema = z.strictObject({
-  schema: z.literal("aira.dev/identity-registry/v1"),
+  schema: z.literal("aira.dev/identity-registry/v2"),
   entries: z.array(z.strictObject({
     id: stableIdentitySchema,
     introduced_in: artifactRevisionIdSchema,

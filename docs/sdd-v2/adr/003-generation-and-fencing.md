@@ -31,7 +31,7 @@ Channels include `cli` and `pi`; optional display identity may be added later. C
 
 The approval transaction itself advances Spec generation. Its record MUST identify the reviewed generation and applicability in the resulting committed state, so it does not immediately invalidate itself. Subsequent carry-forward to a permitted generation requires an explicit deterministic applicability decision recorded in committed state, with unchanged exact subjects and no relevant invalidating mutation. This is not a wildcard approval or global `current generation == reviewed generation` check. Independent approvals/consistency analyses can preserve prior exact approvals under these rules; relevant changes revoke applicability and require appropriate review/revalidation.
 
-Quick mode may use one explicit human decision for the exact requirements revision/hash, design revision/hash, task revision/hash, and observed Spec generation. One transaction records each individual artifact's approval applicability and their common decision provenance. A partial integrated approval cannot appear after recovery.
+Quick mode may use one explicit human decision for the exact Product, Requirements, System Architecture, Program Design, Slice Plan and Task Plan revision/hash set and observed Spec generation. This expands planning cardinality under [ADR-012](012-canonical-planning-ontology.md), without changing exact-binding semantics. One transaction records each individual artifact's approval applicability and their common decision provenance. A partial integrated approval cannot appear after recovery.
 
 ### Claims and runs
 

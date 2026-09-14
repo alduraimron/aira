@@ -1,14 +1,14 @@
 import type { SpecReviewContext } from "./review";
 import { evaluateSpecGates, lineageContext, obligationWaived } from "./review";
 import { artifactApplicability } from "./lineage";
-import { sameArtifact, sameSpecBehavioralBindings, type ArtifactReference } from "./artifacts";
+import { sameArtifact, sameSpecBehavioralBindings } from "./artifacts";
 import { exact, stableIssues, type DomainIssue } from "./primitives";
 import type { Requirements } from "./requirements";
-import type { Design } from "./design";
+import type { SystemArchitecture } from "./architecture";
 import { buildTraceability, type TraceabilityReport } from "./traceability";
 import { validateTaskGraph, type TaskReferenceCatalog } from "../../tasks/graph";
-import type { TaskDefinition, Tasks } from "../../tasks/types";
-import type { AttemptRecord, ExecutionRun, TaskExecutionState } from "../../execution/types";
+import type { Tasks } from "../../tasks/types";
+import type { AttemptRecord, ExecutionRun } from "../../execution/types";
 import type { VerificationEvidence, VerificationPlan } from "../../verification/types";
 import { evidenceApplicability, evidencePasses, sameApprovedSnapshot, validateEvidenceIdentities, type EvidenceContext } from "../../verification/applicability";
 import type { ExecutionBackend, WorkspaceObservation } from "../../workspace/types";
@@ -16,7 +16,7 @@ import { checkBackendRequirements } from "../../workspace/fingerprint";
 import { checkLifecycleTransition, type SpecLifecycle } from "./lifecycle";
 import { specSchema } from "./schema";
 import { requirementsSchema } from "./requirements";
-import { designSchema } from "./design";
+import { architectureSchema } from "./architecture";
 import { artifactRevisionSchema } from "./artifacts";
 import { analysisSchema } from "./analysis";
 import { tasksSchema } from "../../tasks/schema";
@@ -27,11 +27,19 @@ import { humanWaiverSchema, specApprovalRecordSchema } from "../../approval/spec
 import { validateSpecBehavioralBindings } from "./behavior";
 import { validateAttemptBehavior } from "../../execution/behavior";
 import { validatePinnedAssets } from "../../builtins/catalog";
+import { productDefinitionSchema, type ProductDefinition } from "./product";
+import { programDesignSchema, type ProgramDesign } from "./program-design";
+import { slicePlanSchema, evaluateSliceCompletion, type SlicePlan } from "./slices";
+import { planningKinds } from "./planning-kinds";
+import { validateFindingTargets } from "./planning-integrity";
 
 export interface CompletionInput {
   readonly review: SpecReviewContext;
+  readonly product: ProductDefinition;
+  readonly program_design: ProgramDesign;
+  readonly slices: SlicePlan;
   readonly requirements: Requirements;
-  readonly design: Design;
+  readonly architecture: SystemArchitecture;
   readonly tasks: Tasks;
   readonly plan: VerificationPlan;
   readonly catalog: TaskReferenceCatalog;
@@ -52,29 +60,8 @@ export interface CompletionReport {
   readonly blockers: readonly DomainIssue[];
   readonly traceability: TraceabilityReport;
 }
-export interface TaskCompletionInput {
-  readonly task: TaskDefinition;
-  readonly state?: TaskExecutionState;
-  readonly evidence: readonly VerificationEvidence[];
-  readonly evidence_contexts: readonly EvidenceContext[];
-  readonly applicable_artifacts: readonly ArtifactReference[];
-}
-/** Task state is necessary, not sufficient. Recheck configured obligations (INV-TASK-002). */
-export function evaluateTaskCompletion(input: TaskCompletionInput): DomainIssue[] {
-  const issues: DomainIssue[] = [], task = input.task.identity.id;
-  if (!input.state || input.state.status !== "completed") issues.push({ code: "task-not-completed", task });
-  if (input.state && !exact(input.state.task, input.task.identity)) issues.push({ code: "task-state-definition-mismatch", task });
-  for (const condition of input.task.completion) {
-    if (condition.kind === "artifact-published") {
-      if (!input.applicable_artifacts.some((a) => sameArtifact(a, condition.artifact))) issues.push({ code: "task-artifact-missing", task, subject: condition.artifact.revision });
-    } else {
-      const contexts = input.evidence_contexts.filter((c) => c.task.id === task && c.verifier.identity.id === condition.verifier && c.attempt.id === input.state?.current_attempt);
-      if (!input.evidence.some((e) => e.task.id === task && e.verifier.id === condition.verifier && contexts.some((c) => evidencePasses(e, c))))
-        issues.push({ code: "task-verification-missing", task, verifier: condition.verifier });
-    }
-  }
-  return stableIssues(issues);
-}
+export { evaluateTaskCompletion, type TaskCompletionInput } from "../../tasks/completion";
+import { evaluateTaskCompletion } from "../../tasks/completion";
 function evidenceContexts(input: CompletionInput): EvidenceContext[] {
   if (!input.run || !input.review.spec.run_binding) return [];
   const contexts: EvidenceContext[] = [];
@@ -99,8 +86,9 @@ function evidenceContexts(input: CompletionInput): EvidenceContext[] {
 }
 export function evaluateSpecCompletion(input: CompletionInput): CompletionReport {
   const contracts = [
+    ["product", productDefinitionSchema, input.product], ["program-design", programDesignSchema, input.program_design], ["slice-plan", slicePlanSchema, input.slices],
     ["spec", specSchema, input.review.spec], ["requirements", requirementsSchema, input.requirements],
-    ["design", designSchema, input.design], ["tasks", tasksSchema, input.tasks], ["verification-plan", verificationPlanSchema, input.plan],
+    ["architecture", architectureSchema, input.architecture], ["tasks", tasksSchema, input.tasks], ["verification-plan", verificationPlanSchema, input.plan],
     ["workspace-observation", workspaceObservationSchema, input.workspace], ["execution-backend", executionBackendSchema, input.backend],
     ...(input.run ? [["execution-run", executionRunSchema, input.run] as const] : []),
     ...input.review.revisions.map((r) => [r.id, artifactRevisionSchema, r] as const),
@@ -111,20 +99,31 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
     ...input.evidence.map((e) => [e.id, verificationEvidenceSchema, e] as const),
   ] as const;
   const malformed = contracts.filter(([, schema, value]) => !schema.safeParse(value).success)
-    .map(([subject]) => ({ code: "invalid-domain-contract", subject }));
-  if (malformed.length) return { complete: false, blockers: stableIssues(malformed), traceability: { edges: [], requirements: [], evidence: [], issues: [] } };
+    .flatMap(([subject, , value]) => [{ code: "invalid-domain-contract", subject },
+      ...(["product", "program-design", "slice-plan"].includes(subject) ? [{ code: `${subject}-${value ? "invalid" : "missing"}`, subject }] : [])]);
+  if (malformed.length) return { complete: false, blockers: stableIssues(malformed), traceability: { edges: [], requirements: [], product_outcomes: [], success_criteria: [], evidence: [], issues: [] } };
   const { spec } = input.review, lineage = lineageContext(input.review), policy = spec.completion_policy;
-  const kinds = policy.verification_plan_approval_required ? ["requirements", "design", "tasks", "verification-plan"] as const : ["requirements", "design", "tasks"] as const;
-  const blockers: DomainIssue[] = [...evaluateSpecGates(input.review, kinds), ...validateTaskGraph(input.tasks, input.catalog), ...validateEvidenceIdentities(input.evidence),
+  const kinds = policy.verification_plan_approval_required ? [...planningKinds, "verification-plan"] as const : planningKinds;
+  const blockers: DomainIssue[] = [...evaluateSpecGates(input.review, kinds), ...validateTaskGraph(input.tasks, { ...input.catalog, requirements: input.requirements.requirements,
+      decisions: input.architecture.decisions, program_decisions: input.program_design.decisions, verifiers: input.plan.verifiers.map((v) => v.identity) }),
+    ...validateFindingTargets(lineage.analyses.filter((a) => a.inputs.every((i) => lineage.current.some((r) => sameArtifact(i, r)))),
+      [input.product, input.requirements, input.architecture, input.program_design, input.slices, input.tasks, input.plan]), ...validateEvidenceIdentities(input.evidence),
     ...validateSpecBehavioralBindings(spec, input.review.revisions, input.review.analyses, input.behavioral.snapshots, input.behavioral.catalog, input.behavioral.environment)];
   if (!["verifying", "completed"].includes(spec.lifecycle.state)) blockers.push({ code: "spec-not-completable", subject: spec.lifecycle.state });
-  for (const [kind, artifact] of [["requirements", input.requirements], ["design", input.design], ["tasks", input.tasks], ["verification-plan", input.plan]] as const) {
+  for (const [kind, artifact] of [["product", input.product], ["program-design", input.program_design], ["slice-plan", input.slices], ["requirements", input.requirements], ["architecture", input.architecture], ["tasks", input.tasks], ["verification-plan", input.plan]] as const) {
     const current = spec.artifacts.current.find((s) => s.artifact.kind === kind);
     if (artifact.spec_id !== spec.id || current?.artifact.revision !== artifact.revision) blockers.push({ code: "canonical-artifact-mismatch", subject: kind });
-    if (current) blockers.push(...artifactApplicability(lineage, current.artifact).reasons);
+    if (!current && planningKinds.some((k) => k === kind)) blockers.push({ code: `${kind}-missing`, subject: kind });
+    if (current) {
+      const reasons = artifactApplicability(lineage, current.artifact).reasons;
+      blockers.push(...reasons);
+      if (reasons.some((r) => r.code === "artifact-stale")) blockers.push({ code: `${kind}-stale`, subject: kind });
+    }
+    if (blockers.some((b) => b.subject === kind && ["required-analysis-missing", "artifact-approval-missing"].includes(b.code))) blockers.push({ code: `${kind}-blocked`, subject: kind });
   }
-  const ids = [...input.requirements.requirements.flatMap((r) => [r.id, ...r.acceptance_criteria.map((a) => a.id)]),
-    ...input.design.decisions.map((d) => d.id), ...input.tasks.tasks.map((t) => t.identity.id), ...input.plan.verifiers.map((v) => v.identity.id),
+  const ids = [...input.product.outcomes.map((o) => o.id), ...input.product.success_criteria.map((s) => s.id),
+    ...input.program_design.decisions.map((p) => p.id), ...input.slices.slices.map((s) => s.id), ...input.requirements.requirements.flatMap((r) => [r.id, ...r.acceptance_criteria.map((a) => a.id)]),
+    ...input.architecture.decisions.map((d) => d.id), ...input.tasks.tasks.map((t) => t.identity.id), ...input.plan.verifiers.map((v) => v.identity.id),
     ...input.review.analyses.flatMap((a) => a.findings.map((f) => f.id))];
   for (const id of ids) {
     const entry = spec.identities.entries.find((e) => e.id === id);
@@ -150,6 +149,7 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
     if (!binding || !sameApprovedSnapshot(run.snapshot, binding.snapshot)) blockers.push({ code: "run-snapshot-inapplicable" });
     if (!["verifying", "completed"].includes(run.status)) blockers.push({ code: "run-not-quiescent" });
     if (run.claims.some((c) => c.status === "active") || run.authorities.some((a) => a.status === "active")) blockers.push({ code: "active-execution" });
+    if (run.slices.some((s) => ["running", "verifying", "interrupted", "unknown"].includes(s.status))) blockers.push({ code: "unsafe-slice-state" });
     for (const state of run.tasks) {
       if (["claimed", "running", "verifying", "unknown", "interrupted"].includes(state.status)) blockers.push({ code: "unsafe-task-state", task: state.task.id, subject: state.status });
       if (run.tasks.filter((s) => s.task.id === state.task.id).length !== 1) blockers.push({ code: "duplicate-task-state", task: state.task.id });
@@ -190,7 +190,11 @@ export function evaluateSpecCompletion(input: CompletionInput): CompletionReport
         blockers.push(...evidenceApplicability(e, c).reasons);
     }
   }
-  const traceability = buildTraceability({ requirements: input.requirements, design: input.design, tasks: input.tasks,
+  for (const slice of input.slices.slices.filter((s) => s.required || run?.slices.some((state) => state.slice === s.id && state.status === "completed")))
+    blockers.push(...evaluateSliceCompletion({ slice, plan: input.slices, states: run?.slices ?? [], review: input.review,
+      tasks: input.tasks, task_states: run?.tasks ?? [], verification: input.plan, evidence: input.evidence, evidence_contexts: contexts }));
+  const traceability = buildTraceability({ product: input.product, program_design: input.program_design, slices: input.slices,
+    artifacts: spec.artifacts.current.map((s) => s.artifact), requirements: input.requirements, architecture: input.architecture, tasks: input.tasks,
     plan: input.plan, evidence: input.evidence, evidence_contexts: contexts, policy });
   for (const issue of traceability.issues) if (!obligationWaived(input.review, issue.code, issue.subject ?? issue.requirement ?? "")) blockers.push(issue);
   for (const coverage of traceability.requirements.filter((r) => r.enforced)) {

@@ -13,9 +13,9 @@ export const pathSelectorSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("tree"), path: exactPathSchema }),
   z.strictObject({ kind: z.literal("glob"), pattern: deterministicGlobSchema, dialect: z.literal("aira.dev/glob/v1") }),
 ]);
-export const contextPhaseSchema = z.enum(["intent", "requirements", "analysis", "design", "tasks", "implementation", "verification", "revision"]);
+export const contextPhaseSchema = z.enum(["intent", "product", "requirements", "analysis", "architecture", "program-design", "slice-plan", "tasks", "implementation", "verification", "revision"]);
 export const contextDeclarationSchema = z.strictObject({
-  schema: z.literal("aira.dev/context-declaration/v1"), id: contextDeclarationIdSchema,
+  schema: z.literal("aira.dev/context-declaration/v2"), id: contextDeclarationIdSchema,
   selector: pathSelectorSchema, required: z.boolean(), phases: z.array(contextPhaseSchema).min(1),
   tasks: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("all") }),
     z.strictObject({ kind: z.literal("selected"), ids: z.array(taskIdSchema).min(1).refine(unique) })]),

@@ -27,7 +27,7 @@ describe("INV-TASK-003/004: structured identity-based DAG", () => {
   test.each([
     ["requirements", ["R9"], "unknown-task-requirement"],
     ["acceptance_criteria", ["R1.AC9"], "unknown-task-acceptance-criterion"],
-    ["design_decisions", ["D9"], "unknown-task-design-decision"],
+    ["architecture_decisions", ["A9"], "unknown-task-architecture-decision"],
   ] as const)("unknown %s reference", (field, value, code) => {
     expect(graphCodes([{ ...task(), [field]: [...value] }])).toContain(code);
   });
@@ -53,8 +53,9 @@ describe("INV-TASK-003/004: structured identity-based DAG", () => {
 describe("INV-TASK-001/003: set-based readiness", () => {
   function input() {
     const f = fixture(); f.spec.lifecycle = { state: "ready" };
+    f.slices.slices[0]!.tasks = ["T1", "T2", "T3"].map((id) => taskIdSchema.parse(id));
     return { definitions: { ...f.tasks, tasks: [task("T3", ["T1"]), task("T2"), task("T1")] }, catalog: f.catalog, states: [] as typeof f.run.tasks,
-      review: f.review, preconditions: [], f };
+      slices: f.slices, slice_states: [], active_slices: [f.slices.slices[0]!.id], review: f.review, preconditions: [], f };
   }
   test("all roots ready and dependent waits; no current_task cursor", () => {
     const i = input(), result = taskReadiness(i);

@@ -23,7 +23,7 @@ test.each([null, [], {}, { schema: "aira.dev/store-head/v1" }].map((value) => [v
 });
 test("valid blob hash cannot substitute the wrong record type", async () => {
   const x = await setup(), bytes = canonicalBytes(x.result.state.spec), hash = await x.store.blobs.put(bytes);
-  await code(readRecords(x.store.blobs, [{ hash, contract: "aira.dev/requirements/v1" }]), "STORE_INTEGRITY");
+  await code(readRecords(x.store.blobs, [{ hash, contract: "aira.dev/requirements/v2" }]), "STORE_INTEGRITY");
 });
 test.each(["directory", "owner-file", "metadata"])("same-token lock %s substitution is rejected", async (kind) => {
   const x = await setup(), lock = await x.store.locks.acquire(x.result.spec_id), dir = x.store.fs.paths.lock(lock.spec);
@@ -89,10 +89,10 @@ test("run identity cannot be rebound even with schema-valid inputs and correct g
 test("schema-valid rehashed commit with mismatched claim inputs fails current and deep loading", async () => {
   const x = await setup(), request = withRun(x.result), saved = await x.store.commit(request.transaction, request.blobs);
   const c = commitSchema.parse((await x.store.history(x.result.spec_id))[0]);
-  const tasks = request.records.find((r) => r.schema === "aira.dev/tasks/v1");
-  if (!tasks || tasks.schema !== "aira.dev/tasks/v1") throw Error("fixture");
+  const tasks = request.records.find((r) => r.schema === "aira.dev/tasks/v2");
+  if (!tasks || tasks.schema !== "aira.dev/tasks/v2") throw Error("fixture");
   const run = c.payload.transaction.state.runs[0]!;
-  run.claims.push(claimRecordSchema.parse({ schema: "aira.dev/task-claim/v1", id: "claim_bad", task: tasks.tasks[0]!.identity,
+  run.claims.push(claimRecordSchema.parse({ schema: "aira.dev/task-claim/v2", id: "claim_bad", task: tasks.tasks[0]!.identity,
     run: run.id, attempt: "attempt_future", owner: "test", generation: "0",
     fence: { run: run.id, claim: "claim_bad", attempt: "attempt_future", owner: "test", epoch: "0" },
     snapshot: { ...run.snapshot, generation: "0" }, status: "active", lease: { issued_at: at, expires_at: "2026-08-27T12:00:00.000Z" } }));

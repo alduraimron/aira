@@ -23,8 +23,11 @@ At minimum, a production-grade Host Pi Aira skill MUST cover:
 At minimum:
 
 - clarification;
+- product generation and product analysis;
 - requirements generation and requirements analysis;
-- design generation and design analysis;
+- architecture generation and architecture analysis;
+- program-design generation and program-design analysis;
+- slice-plan generation and slice-plan analysis;
 - task generation and task analysis;
 - implementation and repair;
 - implementation review and verification review;
@@ -38,13 +41,19 @@ A valid schema or content hash alone does not establish production content quali
 
 At minimum, meaningful differentiated built-ins for:
 
-- **feature**: feature requirements analysis, design analysis, task planning and standard
-  implementation behavior;
-- **bugfix**: reproduction focus, root cause, regression requirements and verification;
-- **refactor**: behavior preservation, architecture constraints and compatibility;
-- **migration**: safety, compatibility windows, rollback and partial failure handling.
+- **feature**: Product user outcomes/value, Requirements for new behavior, Architecture
+  integration, concrete Program Design, incremental user-visible Slices and implementation;
+- **bugfix**: Product failure/impact, corrected behavior and regression requirements,
+  root-cause boundaries and fault paths, reproduction/fix/regression-proof Slices;
+- **refactor**: reasons for change without behavior regression, preservation requirements,
+  target boundaries/dependencies, move/extract/reshape design and verifiable checkpoints;
+- **migration**: Product migration motivation, data safety/compatibility requirements,
+  old/new topology, code/data transitions and preparation/dual-compatibility/cutover/cleanup Slices.
 
-The domain also supports explicitly named custom kinds. Requirements-first, design-first
+All six planning layers MUST receive meaningful differentiated behavioral selections.
+These are content quality requirements, not hard-coded prose in the core domain.
+
+The domain also supports explicitly named custom kinds. Requirements-first, architecture-first
 and quick have explicit production-grade mode configuration where behavior differs,
 while retaining the same canonical artifacts and hard lifecycle rules. Tests MUST
 establish that kind/mode distinctions are meaningful, not just renamed minimal aliases.
@@ -54,8 +63,8 @@ establish that kind/mode distinctions are meaningful, not just renamed minimal a
 Context templates/profiles MUST cover at least **product**, **architecture**,
 **conventions** and **security**.
 
-Capability profiles MUST cover at least **readonly-analysis**, **design-analysis**,
-**implementation** and **verification**, subject to actual backend enforcement guarantees.
+Capability profiles MUST cover at least **readonly-analysis**, **architecture-analysis**,
+**program-design-analysis**, **slice-plan-analysis**, **implementation** and **verification**, subject to actual backend enforcement guarantees.
 They must not claim that prompt advice, a worktree or a Pi hook enforces confinement.
 Verification profiles, execution profiles and execution recipes used by these built-ins
 must be production-grade, tested and pinned as well. Parent restrictions and lifecycle
@@ -68,7 +77,7 @@ reference documentation exists. At minimum v2 MUST ship documentation for:
 
 - getting started;
 - the conceptual SDD model;
-- Specs, requirements, design and tasks;
+- Specs, Product versus Requirements, System Architecture versus Program Design, and Vertical Slices versus Tasks;
 - approvals and revisions;
 - context;
 - capabilities and security;
@@ -88,7 +97,7 @@ not just command syntax. Architecture documents alone do not replace user docume
 Release-tested examples MUST include:
 
 1. requirements-first feature;
-2. design-first feature;
+2. architecture-first feature;
 3. quick Spec;
 4. bugfix;
 5. refactor;

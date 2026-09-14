@@ -1,11 +1,12 @@
 import type { Spec } from "./types";
-import { sameArtifact, type ArtifactKind, type ArtifactRevision, type ArtifactSubject } from "./artifacts";
-import type { Analysis } from "./analysis";
-import { artifactApplicability, hasConsistencyBinding, type LineageContext } from "./lineage";
+import { sameArtifact, approvalArtifactKindSchema, type ArtifactKind, type ArtifactRevision, type ArtifactSubject } from "./artifacts";
+import { analysisSchema, type Analysis } from "./analysis";
+import { artifactApplicability, hasApplicableDependency, hasConsistencyBinding, type LineageContext } from "./lineage";
 import { approvalApplicability, integratedApprovalApplicability, waiverApplies, type DecisionContext } from "../../approval/spec-policy";
-import type { HumanWaiver, SpecApprovalRecord } from "../../approval/spec-records";
-import { stableIssues, type DomainIssue, type DomainResult } from "./primitives";
+import { humanWaiverSchema, specApprovalRecordSchema, type HumanWaiver, type SpecApprovalRecord } from "../../approval/spec-records";
+import { stableIssues, unique, type DomainIssue, type DomainResult } from "./primitives";
 import { checkLifecycleTransition, type SpecLifecycle } from "./lifecycle";
+import { planningKinds } from "./planning-kinds";
 
 export interface SpecReviewContext {
   readonly spec: Spec;
@@ -13,10 +14,11 @@ export interface SpecReviewContext {
   readonly analyses: readonly Analysis[];
   readonly approvals: readonly SpecApprovalRecord[];
   readonly waivers: readonly HumanWaiver[];
+  readonly entities?: LineageContext["entities"];
 }
 export function lineageContext(context: SpecReviewContext): LineageContext {
   return { revisions: context.revisions, current: [...context.spec.artifacts.current.map((s) => s.artifact), ...context.spec.analyses],
-    proposed: context.spec.artifacts.proposed, validations: context.spec.lineage.validations, invalidations: context.spec.lineage.invalidations,
+    entities: context.entities, proposed: context.spec.artifacts.proposed, validations: context.spec.lineage.validations, invalidations: context.spec.lineage.invalidations,
     analyses: context.analyses.filter((a) => context.spec.analyses.some((r) => r.revision === a.revision)), generation: context.spec.generation };
 }
 export function decisionContext(context: SpecReviewContext): DecisionContext {
@@ -40,7 +42,13 @@ export function blockingFindingIssues(context: SpecReviewContext): DomainIssue[]
   }
   return stableIssues(issues);
 }
-export function evaluateSpecGates(context: SpecReviewContext, kinds: readonly ArtifactKind[] = ["requirements", "design", "tasks"], requireApproval = true): DomainIssue[] {
+export function evaluateSpecGates(context: SpecReviewContext, kinds: readonly ArtifactKind[] = planningKinds, requireApproval = true): DomainIssue[] {
+  const malformed = [
+    ...context.analyses.filter((a) => !analysisSchema.safeParse(a).success).map((a) => ({ code: "invalid-domain-contract", subject: a.revision })),
+    ...context.approvals.filter((a) => !specApprovalRecordSchema.safeParse(a).success).map((a) => ({ code: "invalid-domain-contract", subject: a.id })),
+    ...context.waivers.filter((w) => !humanWaiverSchema.safeParse(w).success).map((w) => ({ code: "invalid-domain-contract", subject: w.id })),
+  ];
+  if (malformed.length) return stableIssues(malformed);
   const issues: DomainIssue[] = [], lineage = lineageContext(context), decisions = decisionContext(context);
   for (const kind of kinds) {
     const subject = context.spec.artifacts.current.find((s) => s.artifact.kind === kind);
@@ -48,7 +56,7 @@ export function evaluateSpecGates(context: SpecReviewContext, kinds: readonly Ar
     issues.push(...artifactApplicability(lineage, subject.artifact).reasons);
     if (requireApproval && !context.approvals.some((a) => context.spec.approvals.includes(a.id) && approvalApplicability(a, subject, decisions).length === 0))
       issues.push({ code: "artifact-approval-missing", subject: kind });
-    if (["requirements", "design", "tasks"].includes(kind)) {
+    if (planningKinds.some((k) => k === kind)) {
       const analyses = lineage.analyses.filter((a) => a.spec_id === context.spec.id && a.phase === kind &&
         a.inputs.some((i) => sameArtifact(i, subject.artifact)) &&
         a.inputs.every((i) => lineage.current.some((r) => sameArtifact(r, i))));
@@ -60,14 +68,24 @@ export function evaluateSpecGates(context: SpecReviewContext, kinds: readonly Ar
     }
   }
   const requirements = context.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")?.artifact;
-  const design = context.spec.artifacts.current.find((s) => s.artifact.kind === "design")?.artifact;
+  const architecture = context.spec.artifacts.current.find((s) => s.artifact.kind === "architecture")?.artifact;
   const tasks = context.spec.artifacts.current.find((s) => s.artifact.kind === "tasks")?.artifact;
+  const dependencies: Partial<Record<ArtifactKind, readonly ArtifactKind[]>> = {
+    product: ["intent"], requirements: context.spec.authoring_order === "architecture-first" ? ["product", "architecture"] : ["product"], architecture: [context.spec.authoring_order === "architecture-first" ? "product" : "requirements"],
+    "program-design": ["architecture", "requirements"], "slice-plan": ["program-design"], tasks: ["slice-plan"],
+  };
+  for (const kind of kinds) {
+    const subject = context.spec.artifacts.current.find((s) => s.artifact.kind === kind)?.artifact;
+    for (const parentKind of dependencies[kind] ?? []) {
+      const parent = context.spec.artifacts.current.find((s) => s.artifact.kind === parentKind)?.artifact;
+      if (!subject || !parent || !hasApplicableDependency(lineage, subject, parent)) issues.push({ code: "planning-lineage-incomplete", subject: kind, related: [parentKind] });
+    }
+  }
+  if (kinds.some((k) => ["program-design", "slice-plan", "tasks"].includes(k)) &&
+    (!requirements || !architecture || !hasConsistencyBinding(lineage, architecture, requirements))) issues.push({ code: "architecture-consistency-missing" });
   if (kinds.includes("tasks")) {
-    if (!requirements || !design || !hasConsistencyBinding(lineage, design, requirements)) issues.push({ code: "design-consistency-missing" });
-    if (requirements && design && tasks) {
-      const definition = context.revisions.find((r) => r.id === tasks.revision);
-      for (const upstream of [requirements, design]) if (!definition?.lineage.some((e) => e.relation === "derived_from" && sameArtifact(e.target, upstream)) &&
-        !hasConsistencyBinding(lineage, tasks, upstream)) issues.push({ code: "tasks-lineage-incomplete", subject: upstream.kind });
+    if (requirements && architecture && tasks) {
+      for (const upstream of [requirements, architecture]) if (!hasApplicableDependency(lineage, tasks, upstream)) issues.push({ code: "tasks-lineage-incomplete", subject: upstream.kind });
     }
     if (context.spec.mode === "quick" && requireApproval && !context.approvals.some((a) => context.spec.approvals.includes(a.id) && integratedApprovalApplicability(a, decisions).length === 0))
       issues.push({ code: "integrated-approval-missing" });
@@ -80,7 +98,9 @@ export function evaluateSpecGates(context: SpecReviewContext, kinds: readonly Ar
 /** Evaluate a proposed exact review set without publishing it or granting approval. */
 export function evaluateApprovalEligibility(context: SpecReviewContext, subjects: readonly ArtifactSubject[]): DomainIssue[] {
   const issues: DomainIssue[] = [];
-  if (context.spec.mode === "quick" && (subjects.length !== 3 || !["requirements", "design", "tasks"].every((kind) => subjects.some((s) => s.artifact.kind === kind))))
+  if (!subjects.length || !unique(subjects.map((s) => s.artifact.kind)) || subjects.some((s) => !approvalArtifactKindSchema.safeParse(s.artifact.kind).success))
+    issues.push({ code: "invalid-approval-subject-set" });
+  if (context.spec.mode === "quick" && (subjects.length !== 6 || !planningKinds.every((kind) => subjects.some((s) => s.artifact.kind === kind))))
     issues.push({ code: "integrated-approval-incomplete" });
   for (const subject of subjects) if (![...context.spec.artifacts.current.map((s) => s.artifact), ...context.spec.artifacts.proposed].some((r) => sameArtifact(r, subject.artifact)))
     issues.push({ code: "approval-subject-mismatch", subject: subject.artifact.revision });
@@ -96,8 +116,8 @@ export function evaluateApprovalEligibility(context: SpecReviewContext, subjects
  */
 export function evaluateTaskArtifactPromotion(context: SpecReviewContext): DomainIssue[] {
   return stableIssues([
-    ...evaluateSpecGates(context, ["requirements", "design", "tasks"], context.spec.mode === "quick"),
-    ...(context.spec.mode === "quick" ? [] : evaluateSpecGates(context, ["requirements", "design"])),
+    ...evaluateSpecGates(context, planningKinds, context.spec.mode === "quick"),
+    ...(context.spec.mode === "quick" ? [] : evaluateSpecGates(context, planningKinds.filter((k) => k !== "tasks"))),
   ]);
 }
 
@@ -107,33 +127,37 @@ export function evaluateLifecycleTransition(context: SpecReviewContext, to: Spec
   const structural = checkLifecycleTransition(spec.mode, spec.lifecycle, to, spec.authoring_order);
   const issues: DomainIssue[] = structural.ok ? [] : [...structural.issues];
   const quick = spec.mode === "quick";
+  for (const kind of planningKinds) {
+    if (to.state === `waiting-${kind}-approval`) issues.push(...evaluateSpecGates(context, [kind], false));
+    if (to.state === `${kind}-approved`) issues.push(...evaluateSpecGates(context, [kind]));
+  }
   switch (to.state) {
-    case "waiting-requirements-approval": issues.push(...evaluateSpecGates(context, ["requirements"], false)); break;
-    case "requirements-approved": issues.push(...evaluateSpecGates(context, ["requirements"])); break;
-    case "waiting-design-approval": issues.push(...evaluateSpecGates(context, ["design"], false)); break;
-    case "design-approved": issues.push(...evaluateSpecGates(context, ["design"])); break;
     case "drafting-requirements":
-      if (spec.authoring_order === "design-first" && spec.lifecycle.state !== "drafting-requirements")
-        issues.push(...evaluateSpecGates(context, ["design"], !quick));
+      issues.push(...evaluateSpecGates(context, ["product"], !quick));
+      if (spec.authoring_order === "architecture-first" && spec.lifecycle.state !== "drafting-requirements")
+        issues.push(...evaluateSpecGates(context, ["architecture"], !quick));
       break;
-    case "drafting-design":
+    case "drafting-architecture":
+      issues.push(...evaluateSpecGates(context, ["product"], !quick));
       if (spec.authoring_order === "requirements-first") issues.push(...evaluateSpecGates(context, ["requirements"], !quick));
       break;
-    case "validating-design":
-      // Revalidation is allowed to examine stale design. It does not authorize using it.
+    case "validating-architecture":
+      // Revalidation is allowed to examine stale architecture. It does not authorize using it.
       issues.push(...evaluateSpecGates(context, ["requirements"], !quick));
-      if (!spec.artifacts.current.some((s) => s.artifact.kind === "design")) issues.push({ code: "required-artifact-missing", subject: "design" });
+      if (!spec.artifacts.current.some((s) => s.artifact.kind === "architecture")) issues.push({ code: "required-artifact-missing", subject: "architecture" });
       break;
-    case "drafting-tasks": {
-      issues.push(...evaluateSpecGates(context, ["requirements", "design"], !quick));
+    case "drafting-program-design": {
+      issues.push(...evaluateSpecGates(context, ["product", "requirements", "architecture"], !quick));
       const requirements = spec.artifacts.current.find((s) => s.artifact.kind === "requirements")?.artifact;
-      const design = spec.artifacts.current.find((s) => s.artifact.kind === "design")?.artifact;
-      if (!requirements || !design || !hasConsistencyBinding(lineageContext(context), design, requirements)) issues.push({ code: "design-consistency-missing" });
+      const architecture = spec.artifacts.current.find((s) => s.artifact.kind === "architecture")?.artifact;
+      if (!requirements || !architecture || !hasConsistencyBinding(lineageContext(context), architecture, requirements)) issues.push({ code: "architecture-consistency-missing" });
       break;
     }
+    case "drafting-slice-plan": issues.push(...evaluateSpecGates(context, planningKinds.slice(0, 4), !quick)); break;
+    case "drafting-tasks": issues.push(...evaluateSpecGates(context, planningKinds.slice(0, 5), !quick)); break;
     case "waiting-tasks-approval":
-      issues.push(...evaluateSpecGates(context, ["requirements", "design"]), ...evaluateSpecGates(context, ["requirements", "design", "tasks"], false)); break;
-    case "waiting-integrated-approval": issues.push(...evaluateSpecGates(context, ["requirements", "design", "tasks"], false)); break;
+      issues.push(...evaluateSpecGates(context, planningKinds.slice(0, 5)), ...evaluateSpecGates(context, planningKinds, false)); break;
+    case "waiting-integrated-approval": issues.push(...evaluateSpecGates(context, planningKinds, false)); break;
     case "ready": case "implementing": case "verifying": issues.push(...evaluateSpecGates(context)); break;
     case "completed": issues.push({ code: "completion-evaluation-required" }); break;
   }

@@ -3,9 +3,9 @@ import { contentHashSchema, profileReferenceSchema, policyReferenceSchema } from
 import { behavioralAssetCatalogSchema } from "../../src/builtins/catalog";
 import { assetCompatibilityEnvironmentSchema } from "../../src/builtins/compatibility";
 
-export const syntheticCompatibility = { domain_schemas: ["aira.dev/spec/v1"], required_schemas: [], runtime_capabilities: [],
+export const syntheticCompatibility = { domain_schemas: ["aira.dev/spec/v2"], required_schemas: [], runtime_capabilities: [],
   backend_capabilities: [], backend_implementations: [], required_interfaces: [], provided_interfaces: [] };
-export const syntheticEnvironment = () => assetCompatibilityEnvironmentSchema.parse({ domain_schema: "aira.dev/spec/v1", supported_schemas: [], runtime_capabilities: [], host_interfaces: [] });
+export const syntheticEnvironment = () => assetCompatibilityEnvironmentSchema.parse({ domain_schema: "aira.dev/spec/v2", supported_schemas: [], runtime_capabilities: [], host_interfaces: [] });
 export function baseBehavioralCatalog() {
   return behavioralAssetCatalogSchema.parse({ bundles: [], assets: baseBehavioralPins().map((pin) => ({
     revision: { schema: "aira.dev/behavioral-asset/v1", identity: pin.asset, content_encoding: "aira.dev/asset-bytes/raw/v1", compatibility: syntheticCompatibility,

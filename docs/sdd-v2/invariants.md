@@ -4,9 +4,9 @@ Status: accepted, normative. Each `- INV-...: ...` line is one stable review/tes
 
 ## Spec and boundaries (ADR-001, ADR-004)
 
-- INV-SPEC-001: The Spec lifecycle is Requirements -> Design -> Tasks -> Execution -> Verification -> Completion, with authoring modes distinct from the generic recipe workflow state.
+- INV-SPEC-001: The canonical Spec hierarchy is Intent -> Product Definition -> Requirements -> System Architecture -> Program Design -> Vertical Slice Plan -> Task DAG -> Execution -> Verification -> Completion, with authoring modes distinct from the generic recipe workflow state.
 - INV-SPEC-002: The first v2 persistence contract represents the complete required-contract table in architecture.md, including all modes, DAG tasks, parallel claims, and isolated workspace providers; staging execution MUST NOT simplify persisted semantics.
-- INV-SPEC-003: Quick mode produces the same canonical requirements, design, and structured tasks and required analyses/validation; only intermediate human gates are removed.
+- INV-SPEC-003: Quick mode produces all six canonical planning artifacts (Product, Requirements, Architecture, Program Design, Slice Plan and Tasks) and their required analyses/validation; only intermediate human gates are removed.
 - INV-DOMAIN-001: Spec domain is pure and MUST NOT directly or transitively depend on filesystem/process adapters, Pi SDK, CLI/frontends, or the workflow executor; frontends call Core, not the reverse from domain.
 
 ## Behavioral assets and product completeness (ADR-011)
@@ -34,18 +34,33 @@ Status: accepted, normative. Each `- INV-...: ...` line is one stable review/tes
 
 - INV-APPROVAL-001: Human approval is applicable only to exact artifact revision/hash subjects and permitted Spec generation; observed-generation checks and any committed carry-forward are explicit, never wildcard approval.
 - INV-APPROVAL-002: Human approval/escalation provenance identifies at least kind=human and id=local plus frontend/channel where known; model, worker, or arbitrary Core caller identity MUST NOT imply human authorization.
-- INV-APPROVAL-003: Integrated quick-mode approval is one explicit human decision over the exact requirements/design/tasks revision/hash set and observed Spec generation, atomically recording individual artifact approval applicability.
+- INV-APPROVAL-003: Integrated quick-mode approval is one explicit human decision over the exact Product/Requirements/Architecture/Program Design/Slice Plan/Tasks revision/hash set and observed Spec generation, atomically recording individual artifact approval applicability.
 - INV-LINEAGE-001: Artifact revision identities/content are immutable; derived_from provenance is acyclic and distinct from validated_against applicability records.
-- INV-LINEAGE-002: In design-first mode, approved design informs approved requirements and is analyzed against them; unchanged consistent design needs no artificial revision, changed design needs a newly approved revision, and tasks cannot become current before mutual consistency.
+- INV-LINEAGE-002: In architecture-first mode, approved architecture informs approved requirements and is analyzed against them; unchanged consistent architecture needs no artificial revision, changed architecture needs a newly approved revision, and tasks cannot become current before mutual consistency.
 - INV-LINEAGE-003: Relevant upstream revisions, findings, waivers, and lifecycle mutations explicitly invalidate/revalidate affected downstream applicability while preserving historical feedback, resolutions, and records.
 
-## Tasks, traceability, and completion (ADR-005, ADR-007)
+## Planning ontology (ADR-012)
+
+The expanded wording of INV-SPEC-001/003, INV-APPROVAL-003, INV-LINEAGE-002 and
+INV-TRACE-001 is an explicit stage-05B evolution, not a reuse of retired schema meanings.
+All original authority, provenance, completion and historical integrity guarantees remain.
+
+- INV-PRODUCT-001: Product outcomes and success criteria have stable identities and are explicit upstream planning intent, distinct from system Requirements.
+- INV-ARCH-001: System Architecture and Program Design are distinct canonical artifact types with distinct system-level and intended code-level responsibilities.
+- INV-PROGDESIGN-001: Program Design expresses intended code structure before implementation and is traceable to applicable Architecture/Requirements, including explicit uncertainty.
+- INV-SLICE-001: A Vertical Slice represents an end-to-end observable, reviewable and verifiable increment, not merely a task grouping or horizontal layer.
+- INV-SLICE-002: Every executable Task belongs to exactly one canonical Vertical Slice; reciprocal ownership references agree and no orphan escape hatch exists.
+- INV-SLICE-003: Cross-Slice Task dependencies must be consistent with the separate Slice DAG's direct/transitive predecessor order.
+- INV-SLICE-004: A Slice cannot complete until required Tasks, current applicable Slice-level verification, completion predicates and configured human checkpoints succeed.
+- INV-TRACE-002: Current structured traceability connects Product Outcome -> Success Criterion -> Requirement -> Acceptance Criterion -> Architecture Decision -> Program Design Decision -> Vertical Slice -> Task -> Verifier -> Evidence using stable identities and exact revision bindings.
+
+## Tasks, traceability, and completion (ADR-005, ADR-007, ADR-012)
 
 - INV-TASK-001: A dependent task cannot become ready until every required predecessor is in domain state completed.
 - INV-TASK-002: Completed means the task's configured completion policy succeeded with applicable evidence/decisions; a worker returning successfully is insufficient, including for tasks without shell tests.
 - INV-TASK-003: Task definitions are an identity-based validated DAG from the first schema; scheduler APIs use task/ready sets, never a sequential cursor, even when max_parallel = 1.
 - INV-TASK-004: Existing dependency semantics MUST NOT be weakened to execution-only success; any future execution-only relationship requires a new explicit edge type.
-- INV-TRACE-001: Required Requirement -> Acceptance Criteria -> Design Decision -> Task -> Verifier -> Evidence coverage uses stable identities/revision bindings; uncovered MUST obligations block structural completion unless an explicit policy-authorized human waiver exists.
+- INV-TRACE-001: Required Requirement -> Acceptance Criterion -> Architecture Decision -> Program Design Decision -> Slice -> Task -> Verifier -> Evidence coverage uses stable identities/revision bindings; uncovered MUST obligations block structural completion unless an explicit policy-authorized human waiver exists.
 - INV-COMPLETE-001: Completion requires current approved/consistent artifacts, satisfied task completion/traceability/finding policies, and current applicable evidence; relevant invalidation blocks or revokes completion applicability.
 
 ## Context, capabilities, and workspaces (ADR-006, ADR-010)

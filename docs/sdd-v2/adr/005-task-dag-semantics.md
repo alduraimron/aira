@@ -8,6 +8,15 @@ A serial implementation must not force a sequential domain model. A successful w
 
 ## Decision
 
+Under [ADR-012](012-canonical-planning-ontology.md), Vertical Slices form their own
+identity-based DAG of end-to-end verifiable increments. Each executable Task has exactly
+one Slice owner. Reciprocal membership is checked; cross-Slice Task prerequisites must
+follow direct/transitive Slice ordering. Slice readiness requires completed predecessor
+Slices and applicable planning/approvals/findings. Task readiness requires its owning
+Slice to be explicitly active and runnable. Slice completion rechecks required Task
+policies, current Slice verification/predicates and human checkpoints. No execution is
+implemented by these pure predicates.
+
 Task definitions form a structured DAG from the first v2 schema. Tasks have stable identities, immutable definition revisions, explicit dependency references, traceability, and configured completion policies. Graph validation rejects cycles, missing predecessors, and duplicate/ambiguous identities. Definition state and attempt/execution state are distinct.
 
 A dependency is satisfied only when its predecessor has domain state `completed`. That state means the configured completion policy succeeded with currently applicable evidence/decisions. Worker success by itself is insufficient. Failure, interruption, `unknown`, pending human acceptance, and skipped execution do not satisfy a dependency.
@@ -25,7 +34,7 @@ Do not introduce an ambiguous execution-only dependency. If needed later, it mus
 Required traceability is structured, using stable domain identities:
 
 ```text
-Requirement -> Acceptance Criteria -> Design Decision -> Task -> Verifier -> Evidence
+Product Outcome -> Success Criterion -> Requirement -> Acceptance Criterion -> Architecture Decision -> Program Design Decision -> Slice -> Task -> Verifier -> Evidence
 ```
 
 References also bind relevant revisions so an ID surviving revision does not imply unchanged applicability. Validation checks coverage, not just existence of filenames or Markdown checkboxes. A MUST requirement cannot be structurally complete with uncovered required obligations unless policy permits an explicitly recorded human waiver with scope and provenance.

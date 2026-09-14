@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { behavioralProfileSnapshotSchema, validateBehavioralProfileSnapshot, validateImmutableBehavioralSnapshot, type BehavioralProfileSnapshot } from "../../../src/builtins/snapshots";
 import { behavioralResolutionRequestSchema, resolveBehavioralProfiles } from "../../../src/builtins/resolution";
-import { behavioralAssetPinSchema, type AuthoringBehavioralPhase } from "../../../src/builtins/roles";
+import { behavioralAssetPinSchema, planningBehavioralRoles, type AuthoringBehavioralPhase } from "../../../src/builtins/roles";
 import { validateSpecBehavioralBindings, validateSpecBehavioralEvolution } from "../../../src/spec/domain/behavior";
 import { specSchema } from "../../../src/spec/domain/schema";
 import { artifactRevisionSchema, approvedSpecSnapshotSchema, referenceOf, validateImmutableRevision } from "../../../src/spec/domain/artifacts";
@@ -17,17 +17,18 @@ import { builtinBundleManifestSchema } from "../../../src/builtins/bundle";
 import { syntheticCompatibility } from "../behavioral-fixtures";
 import { available, hash, library, metadata, pin, profile } from "./fixtures";
 
-const phases = ["requirements-generation", "requirements-analysis", "design-generation", "design-analysis", "task-generation", "task-analysis"] as const;
+const phases = planningBehavioralRoles;
 function profileSnapshot(f: ReturnType<typeof library>, phase: AuthoringBehavioralPhase, suffix = "1") {
   const request = behavioralResolutionRequestSchema.parse({ ...f.request, required_roles: [phase] });
   const resolution = resolveBehavioralProfiles(request, f.catalog, f.environment);
   if (!resolution.ok) throw new Error(JSON.stringify(resolution.issues));
-  return behavioralProfileSnapshotSchema.parse({ schema: "aira.dev/behavioral-profile-snapshot/v1", identity: profile(`snapshot_${phase}_${suffix}`),
+  return behavioralProfileSnapshotSchema.parse({ schema: "aira.dev/behavioral-profile-snapshot/v2", identity: profile(`snapshot_${phase}_${suffix}`),
     spec_id: "spec_one", generation: "5", phase, request, resolution: resolution.value, created: metadata });
 }
 function authoringFixture() {
   const f = fixture(), l = library();
-  const outputs = [f.req, f.analysisRevisions[0]!, f.des, f.analysisRevisions[1]!, f.ts, f.analysisRevisions[2]!];
+  const outputs = [f.prod, f.analysisRevisions.find((r) => r.id === f.review.analyses.find((a) => a.phase === "product")!.revision)!,
+    f.req, f.analysisRevisions[0]!, f.des, f.analysisRevisions[1]!, f.pd, f.analysisRevisions[5]!, f.sl, f.analysisRevisions[6]!, f.ts, f.analysisRevisions[2]!];
   const snapshots = phases.map((phase, i) => {
     const record = profileSnapshot(l, phase);
     const output = outputs[i]!;
@@ -42,10 +43,10 @@ function authoringFixture() {
 }
 
 describe("INV-BUILTIN-002 / INV-LINEAGE-001/002: phase-specific immutable authoring history", () => {
-  test("all six authoring activities bind exact profiles through immutable output revisions", () => {
+  test("all twelve authoring activities bind exact profiles through immutable output revisions", () => {
     const f = authoringFixture(); expect(f.validate()).toEqual([]); expect(specSchema.safeParse(f.f.spec).success).toBe(true);
     expect(f.f.spec.behavioral_profiles.map((b) => b.phase)).toEqual([...phases]);
-    expect(new Set(f.snapshots.map((s) => s.snapshot.identity.id)).size).toBe(6);
+    expect(new Set(f.snapshots.map((s) => s.snapshot.identity.id)).size).toBe(12);
     for (const s of f.snapshots) expect(s.snapshot.resolution.decisions.some((d) => d.role === s.snapshot.phase && d.effective[0]!.asset.hash.startsWith("sha256:"))).toBe(true);
   });
   test("Spec history is explicit, not an optional implicit default", () => {
@@ -67,7 +68,7 @@ describe("INV-BUILTIN-002 / INV-LINEAGE-001/002: phase-specific immutable author
     if (change === "output") f.f.review.revisions[1]!.behavioral_profile = profile("unknown");
     if (change === "analysis") f.f.review.analyses[0]!.phase = "tasks";
     if (change === "ambiguous") f.snapshots.push(f.snapshots[0]!);
-    if (change === "phase") f.f.spec.behavioral_profiles[0]!.phase = "design-generation";
+    if (change === "phase") f.f.spec.behavioral_profiles[0]!.phase = "architecture-generation";
     expect(f.validate().length).toBeGreaterThan(0);
   });
   test("snapshot decoding is strict and a fabricated resolution cannot be published", () => {
@@ -90,23 +91,23 @@ describe("INV-BUILTIN-002 / INV-LINEAGE-001/002: phase-specific immutable author
     const f = authoringFixture(), r = f.f.review.revisions.find((r) => r.id === f.f.req.id)!;
     expect(validateImmutableRevision(r, { ...r, behavioral_profile: profile("another") }).map((i) => i.code)).toContain("immutable-revision-overwrite");
   });
-  test("design-first consistency review may use a newer profile without reauthoring unchanged design", () => {
-    const f = fixture("design-first"), l = library();
-    l.request.mode = "design-first"; l.request.authoring_order = "design-first";
-    const designProfile = profileSnapshot(l, "design-generation");
-    const reviewPin = pin("design-analysis", "2"); l.catalog.assets.push(available(reviewPin)); l.request.spec = [reviewPin];
-    const reviewProfile = profileSnapshot(l, "design-analysis", "2");
-    const design = artifactRevisionSchema.parse({ ...f.des, behavioral_profile: designProfile.identity });
+  test("architecture-first consistency review may use a newer profile without reauthoring unchanged architecture", () => {
+    const f = fixture("architecture-first"), l = library();
+    l.request.mode = "architecture-first"; l.request.authoring_order = "architecture-first";
+    const designProfile = profileSnapshot(l, "architecture-generation");
+    const reviewPin = pin("architecture-analysis", "2"); l.catalog.assets.push(available(reviewPin)); l.request.spec = [reviewPin];
+    const reviewProfile = profileSnapshot(l, "architecture-analysis", "2");
+    const architecture = artifactRevisionSchema.parse({ ...f.des, behavioral_profile: designProfile.identity });
     const review = artifactRevisionSchema.parse({ ...f.analysisRevisions[3]!, behavioral_profile: reviewProfile.identity });
-    f.review.revisions = f.review.revisions.map((r) => r.id === design.id ? design : r.id === review.id ? review : r);
+    f.review.revisions = f.review.revisions.map((r) => r.id === architecture.id ? architecture : r.id === review.id ? review : r);
     f.spec.behavioral_profiles = [
-      { output: referenceOf(design), phase: "design-generation", snapshot: designProfile.identity, generation: designProfile.generation },
-      { output: referenceOf(review), phase: "design-analysis", snapshot: reviewProfile.identity, generation: reviewProfile.generation },
+      { output: referenceOf(architecture), phase: "architecture-generation", snapshot: designProfile.identity, generation: designProfile.generation },
+      { output: referenceOf(review), phase: "architecture-analysis", snapshot: reviewProfile.identity, generation: reviewProfile.generation },
     ];
     expect(validateSpecBehavioralBindings(f.spec, f.review.revisions, f.review.analyses,
       [designProfile, reviewProfile].map((s) => ({ snapshot: s, verified_content_hash: s.identity.hash })), l.catalog, l.environment)).toEqual([]);
-    expect(referenceOf(design)).toEqual(referenceOf(f.des)); expect(f.spec.approvals).toEqual(f.review.spec.approvals);
-    expect(reviewProfile.resolution.decisions.find((d) => d.role === "design-analysis")!.effective).toEqual([reviewPin]);
+    expect(referenceOf(architecture)).toEqual(referenceOf(f.des)); expect(f.spec.approvals).toEqual(f.review.spec.approvals);
+    expect(reviewProfile.resolution.decisions.find((d) => d.role === "architecture-analysis")!.effective).toEqual([reviewPin]);
   });
   test("removing a previously pinned asset fails even though a newer default is installed", () => {
     const f = authoringFixture();
@@ -174,7 +175,7 @@ describe("INV-BUILTIN-002/003: execution, context, policy and evidence attributi
   });
   test("dispatch uses the same idempotent capability layers as resolution while checking every candidate bundle", () => {
     const f = fixture(), direct = f.attempt.behavior.pins.find((p) => p.role === "capability-profile")!;
-    const bundle = builtinBundleManifestSchema.parse({ schema: "aira.dev/builtin-bundle/v1", identity: { id: "bundle.aira.attempt", revision: "1", hash: hash(803) },
+    const bundle = builtinBundleManifestSchema.parse({ schema: "aira.dev/builtin-bundle/v2", identity: { id: "bundle.aira.attempt", revision: "1", hash: hash(803) },
       distribution_version: "test", compatibility: syntheticCompatibility, assets: [direct.asset], defaults: [], spec_kinds: [], modes: [] });
     f.behavioral.catalog.bundles.push({ manifest: bundle, verified_content_hash: bundle.identity.hash });
     const bundled = { ...direct, bundle: bundle.identity };

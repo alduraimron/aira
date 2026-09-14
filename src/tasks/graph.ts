@@ -1,5 +1,6 @@
 import type { Requirement } from "../spec/domain/requirements";
-import type { DesignDecision } from "../spec/domain/design";
+import type { ArchitectureDecision } from "../spec/domain/architecture";
+import type { ProgramDesignDecision } from "../spec/domain/program-design";
 import { compareText, exact, stableIssues, type DomainIssue, type PolicyReference, type ProfileReference } from "../spec/domain/primitives";
 import type { ContextDeclaration } from "../context/declarations";
 import { tasksDocumentSchema, taskGraphShapeIssues } from "./schema";
@@ -7,7 +8,8 @@ import type { TaskDefinition } from "./types";
 
 export interface TaskReferenceCatalog {
   readonly requirements: readonly Requirement[];
-  readonly decisions: readonly DesignDecision[];
+  readonly decisions: readonly ArchitectureDecision[];
+  readonly program_decisions: readonly ProgramDesignDecision[];
   readonly verifiers: readonly { id: string }[];
   readonly policies: readonly PolicyReference[];
   readonly execution_profiles: readonly ProfileReference[];
@@ -27,8 +29,10 @@ export function validateTaskGraph(value: unknown, catalog: TaskReferenceCatalog)
       if (!acs.has(ac)) issues.push({ code: "unknown-task-acceptance-criterion", task: id, subject: ac });
       if (!task.requirements.some((r) => ac.startsWith(`${r}.`))) issues.push({ code: "task-acceptance-parent-missing", task: id, subject: ac });
     }
-    for (const decision of task.design_decisions) if (!catalog.decisions.some((d) => d.id === decision))
-      issues.push({ code: "unknown-task-design-decision", task: id, subject: decision });
+    for (const decision of task.architecture_decisions) if (!catalog.decisions.some((d) => d.id === decision))
+      issues.push({ code: "unknown-task-architecture-decision", task: id, subject: decision });
+    for (const decision of task.program_design_decisions) if (!catalog.program_decisions.some((d) => d.id === decision))
+      issues.push({ code: "unknown-task-program-design-decision", task: id, subject: decision });
     for (const verifier of task.verifiers) if (!catalog.verifiers.some((v) => v.id === verifier))
       issues.push({ code: "unknown-task-verifier", task: id, verifier });
     if (!catalog.policies.some((p) => exact(p, task.capability_policy))) issues.push({ code: "unknown-task-policy", task: id });

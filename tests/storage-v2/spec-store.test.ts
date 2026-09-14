@@ -76,7 +76,7 @@ test("named revision cannot be overwritten under a different content hash", asyn
 });
 test("revision feedback exact whitespace persists as a first-class strict domain record", async () => {
   const { store, result } = await setup(), a = withRequirements(mutation(result)); const saved = await store.commit(a.transaction, a.blobs);
-  const request = revisionRequestSchema.parse({ schema: "aira.dev/revision-request/v1", id: "revision_feedback", spec_id: result.spec_id,
+  const request = revisionRequestSchema.parse({ schema: "aira.dev/revision-request/v2", id: "revision_feedback", spec_id: result.spec_id,
     previous_artifact: saved.state.spec.artifacts.current[0]!.artifact, feedback: "  Preserve this feedback.\r\n\n", actor: { kind: "human", id: "local" },
     requested_at: "2026-08-26T12:00:00.000Z", operation: "operation_feedback", status: "pending" });
   const record = encodeRecord(request), t = mutation(saved, "operation_feedback");

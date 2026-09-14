@@ -14,8 +14,8 @@ export const availableBehavioralAssetSchema = z.strictObject({
   configuration: z.union([specKindProfileSchema, modeProfileSchema]).optional(),
 }).refine((a) => {
   const kind = a.revision.identity.kind;
-  return kind === "spec-kind-profile" ? a.configuration?.schema === "aira.dev/spec-kind-profile/v1" && exact(a.configuration.asset, a.revision.identity) :
-    kind === "mode-profile" ? a.configuration?.schema === "aira.dev/mode-profile/v1" && exact(a.configuration.asset, a.revision.identity) : a.configuration === undefined;
+  return kind === "spec-kind-profile" ? a.configuration?.schema === "aira.dev/spec-kind-profile/v2" && exact(a.configuration.asset, a.revision.identity) :
+    kind === "mode-profile" ? a.configuration?.schema === "aira.dev/mode-profile/v2" && exact(a.configuration.asset, a.revision.identity) : a.configuration === undefined;
 }, "asset-configuration-binding-mismatch");
 export const behavioralAssetCatalogSchema = z.strictObject({
   assets: z.array(availableBehavioralAssetSchema),
@@ -73,12 +73,12 @@ export function validateBuiltinBundleContents(manifest: BuiltinBundleManifest, c
   issues.push(...validatePinnedAssets([...memberPins, ...configurationPins], catalog, environment));
   for (const selected of manifest.spec_kinds) {
     const c = catalog.assets.find((a) => exact(a.revision.identity, selected.asset))?.configuration;
-    if (c?.schema !== "aira.dev/spec-kind-profile/v1" || c.kind !== selected.kind || c.custom_kind !== selected.custom_kind)
+    if (c?.schema !== "aira.dev/spec-kind-profile/v2" || c.kind !== selected.kind || c.custom_kind !== selected.custom_kind)
       issues.push({ code: "bundle-kind-profile-mismatch", subject: selected.kind });
   }
   for (const selected of manifest.modes) {
     const c = catalog.assets.find((a) => exact(a.revision.identity, selected.asset))?.configuration;
-    if (c?.schema !== "aira.dev/mode-profile/v1" || c.mode !== selected.mode) issues.push({ code: "bundle-mode-profile-mismatch", subject: selected.mode });
+    if (c?.schema !== "aira.dev/mode-profile/v2" || c.mode !== selected.mode) issues.push({ code: "bundle-mode-profile-mismatch", subject: selected.mode });
   }
   return stableIssues(issues);
 }

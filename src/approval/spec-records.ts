@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { acceptanceCriterionIdSchema, analysisFindingIdSchema, approvalIdSchema, operationIdSchema, requirementIdSchema, specIdSchema, waiverIdSchema } from "../spec/domain/ids";
+import { acceptanceCriterionIdSchema, analysisFindingIdSchema, approvalIdSchema, operationIdSchema, requirementIdSchema, specIdSchema, waiverIdSchema, productOutcomeIdSchema, successCriterionIdSchema, architectureDecisionIdSchema, programDesignDecisionIdSchema } from "../spec/domain/ids";
+import { planningKinds, planningKindSchema } from "../spec/domain/planning-kinds";
 import { artifactSubjectSchema, sameArtifact } from "../spec/domain/artifacts";
 import { specGenerationSchema } from "../spec/domain/generations";
 import { channelSchema, createdMetadataSchema, humanActorSchema, nonBlankSchema, policyReferenceSchema, timestampSchema, unique, type DeepReadonly } from "../spec/domain/primitives";
 
 export const specApprovalRecordSchema = z.strictObject({
-  schema: z.literal("aira.dev/spec-approval/v1"), id: approvalIdSchema, spec_id: specIdSchema,
+  schema: z.literal("aira.dev/spec-approval/v2"), id: approvalIdSchema, spec_id: specIdSchema,
   operation: operationIdSchema, actor: humanActorSchema, channel: channelSchema.optional(),
   observed_generation: specGenerationSchema, committed_generation: specGenerationSchema,
   subjects: z.array(artifactSubjectSchema).min(1), decision: z.enum(["approved", "rejected"]),
@@ -13,12 +14,12 @@ export const specApprovalRecordSchema = z.strictObject({
   at: timestampSchema, comment: z.string().optional(),
 }).refine((a) => BigInt(a.committed_generation) === BigInt(a.observed_generation) + 1n &&
   unique(a.subjects.map((s) => s.artifact.kind)) &&
-  a.subjects.every((s) => ["requirements", "design", "tasks", "verification-plan"].includes(s.artifact.kind)) &&
+  a.subjects.every((s) => [...planningKinds, "verification-plan"].includes(s.artifact.kind)) &&
   (a.scope === "artifact" ? a.subjects.length === 1 && a.integrated_group === undefined :
-    a.integrated_group === a.operation && a.subjects.length === 3 &&
-      ["requirements", "design", "tasks"].every((k) => a.subjects.some((s) => s.artifact.kind === k))), "invalid-approval-binding");
+    a.integrated_group === a.operation && a.subjects.length === 6 &&
+      planningKinds.every((k) => a.subjects.some((s) => s.artifact.kind === k))), "invalid-approval-binding");
 export const approvalApplicabilitySchema = z.strictObject({
-  schema: z.literal("aira.dev/approval-applicability/v1"), approval: approvalIdSchema, spec_id: specIdSchema,
+  schema: z.literal("aira.dev/approval-applicability/v2"), approval: approvalIdSchema, spec_id: specIdSchema,
   subject: artifactSubjectSchema, generation: specGenerationSchema,
   status: z.enum(["applicable", "revoked", "superseded"]),
   carried_from: specGenerationSchema.optional(), superseded_by: approvalIdSchema.optional(),
@@ -26,13 +27,19 @@ export const approvalApplicabilitySchema = z.strictObject({
 }).refine((a) => (a.carried_from === undefined || BigInt(a.carried_from) < BigInt(a.generation)) &&
   (a.status === "superseded") === (a.superseded_by !== undefined), "invalid-approval-applicability");
 export const waiverScopeSchema = z.strictObject({
-  code: z.enum(["unresolved-blocker", "requirement-design-missing", "requirement-implementation-missing",
-    "acceptance-implementation-missing", "requirement-verification-missing", "acceptance-verification-missing"]),
+  code: z.enum(["unresolved-blocker", "requirement-architecture-missing", "requirement-implementation-missing",
+    "acceptance-implementation-missing", "requirement-verification-missing", "acceptance-verification-missing",
+    "requirement-product-coverage-missing", "requirement-slice-missing", "architecture-program-design-missing", "program-design-task-missing",
+    "product-outcome-requirement-missing", "product-success-requirement-missing"]),
   subject: nonBlankSchema,
 }).refine((scope) => (scope.code === "unresolved-blocker" ? analysisFindingIdSchema :
-  scope.code.startsWith("acceptance-") ? acceptanceCriterionIdSchema : requirementIdSchema).safeParse(scope.subject).success, "invalid-waiver-scope-identity");
+  scope.code.startsWith("acceptance-") ? acceptanceCriterionIdSchema :
+  scope.code.startsWith("architecture-") ? architectureDecisionIdSchema :
+  scope.code.startsWith("program-design-") ? programDesignDecisionIdSchema :
+  scope.code.startsWith("product-outcome-") ? productOutcomeIdSchema :
+  scope.code.startsWith("product-success-") ? successCriterionIdSchema : requirementIdSchema).safeParse(scope.subject).success, "invalid-waiver-scope-identity");
 export const humanWaiverSchema = z.strictObject({
-  schema: z.literal("aira.dev/human-waiver/v1"), id: waiverIdSchema, spec_id: specIdSchema,
+  schema: z.literal("aira.dev/human-waiver/v2"), id: waiverIdSchema, spec_id: specIdSchema,
   actor: humanActorSchema, channel: channelSchema.optional(), operation: operationIdSchema,
   policy: policyReferenceSchema, scope: waiverScopeSchema, subjects: z.array(artifactSubjectSchema).min(1),
   observed_generation: specGenerationSchema, committed_generation: specGenerationSchema,
@@ -47,11 +54,11 @@ export const waiverApplicabilitySchema = z.strictObject({
 }).refine((a) => (a.carried_from === undefined || BigInt(a.carried_from) < BigInt(a.generation)) &&
   (a.status === "superseded") === (a.superseded_by !== undefined), "invalid-waiver-applicability");
 export const specDecisionPolicySchema = z.strictObject({
-  schema: z.literal("aira.dev/spec-decision-policy/v1"), identity: policyReferenceSchema,
+  schema: z.literal("aira.dev/spec-decision-policy/v2"), identity: policyReferenceSchema,
   waivable: z.array(waiverScopeSchema.shape.code),
-  required_analyses: z.array(z.enum(["requirements", "design", "tasks"])),
+  required_analyses: z.array(planningKindSchema),
 }).refine((p) => unique(p.waivable) && unique(p.required_analyses) &&
-  ["requirements", "design", "tasks"].every((k) => p.required_analyses.includes(k as "requirements" | "design" | "tasks")), "required-analysis-cannot-be-disabled");
+  planningKinds.every((k) => p.required_analyses.includes(k)), "required-analysis-cannot-be-disabled");
 export type SpecApprovalRecord = DeepReadonly<z.infer<typeof specApprovalRecordSchema>>;
 export type ApprovalApplicability = z.infer<typeof approvalApplicabilitySchema>;
 export type HumanWaiver = DeepReadonly<z.infer<typeof humanWaiverSchema>>;

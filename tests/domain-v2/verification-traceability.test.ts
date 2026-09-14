@@ -6,7 +6,8 @@ import { requirementSchema } from "../../src/spec/domain/requirements";
 import { artifactRevisionIdSchema, evidenceIdSchema } from "../../src/spec/domain/ids";
 import { fixture, hash } from "./fixtures";
 
-const trace = (f: ReturnType<typeof fixture>) => buildTraceability({ requirements: f.requirements, design: f.design, tasks: f.tasks, plan: f.plan,
+const trace = (f: ReturnType<typeof fixture>) => buildTraceability({ product: f.product, program_design: f.program_design, slices: f.slices,
+  artifacts: f.spec.artifacts.current.map((s) => s.artifact), requirements: f.requirements, architecture: f.architecture, tasks: f.tasks, plan: f.plan,
   evidence: f.evidence, evidence_contexts: [f.evidenceContext], policy: f.spec.completion_policy });
 
 describe("INV-EVIDENCE-001/002/003: immutable observations with current applicability", () => {
@@ -82,30 +83,33 @@ describe("INV-TRACE-001: structured revision-bound coverage, not Markdown", () =
   test("complete chain and requirement queries", () => {
     const f = fixture(), report = trace(f);
     expect(report.issues).toEqual([]);
-    expect(report.requirements[0]).toMatchObject({ requirement: "R1", design_decisions: ["D1"], tasks: ["T1"], verifiers: ["V1"], applicable_evidence: ["evidence_one"],
+    expect(report.requirements[0]).toMatchObject({ requirement: "R1", architecture_decisions: ["A1"], tasks: ["T1"], verifiers: ["V1"], applicable_evidence: ["evidence_one"],
       acceptance_criteria: [{ id: "R1.AC1", tasks: ["T1"], verifiers: ["V1"] }] });
     const edges = report.edges.map((e) => `${e.from.kind}:${e.to.kind}`);
-    for (const edge of ["requirement:acceptance-criterion", "acceptance-criterion:design-decision", "design-decision:task", "task:verifier", "verifier:evidence"]) expect(edges).toContain(edge);
+    for (const edge of ["requirement:acceptance-criterion", "acceptance-criterion:architecture-decision", "architecture-decision:task", "task:verifier", "verifier:evidence"]) expect(edges).toContain(edge);
     expect(report.edges.every((e) => e.from.revision.length > 0 && e.to.revision.length > 0)).toBe(true);
   });
-  test("uncovered MUST implementation/design/verification obligations", () => {
+  test("uncovered MUST implementation/architecture/verification obligations", () => {
     const f = fixture(); f.requirements.requirements.push(requirementSchema.parse({ ...f.requirements.requirements[0]!, id: "R2",
       acceptance_criteria: [{ id: "R2.AC1", form: "ubiquitous", expected_behavior: "Encrypt exports" }] }));
     const codes = trace(f).issues.filter((i) => i.requirement === "R2").map((i) => i.code);
-    for (const code of ["requirement-design-missing", "requirement-implementation-missing", "requirement-verification-missing", "acceptance-implementation-missing", "acceptance-verification-missing"]) expect(codes).toContain(code);
+    for (const code of ["requirement-architecture-missing", "requirement-implementation-missing", "requirement-verification-missing", "acceptance-implementation-missing", "acceptance-verification-missing"]) expect(codes).toContain(code);
   });
   test("MUST missing required verifier is not covered by an optional unrelated check", () => {
     const f = fixture(); f.plan.required_verifiers = []; f.tasks.tasks[0]!.completion = [{ kind: "artifact-published", artifact: f.spec.artifacts.current[1]!.artifact }];
     expect(trace(f).issues.map((i) => i.code)).toContain("requirement-verification-missing");
   });
   test("must/should/could enforcement follows explicit completion policy", () => {
-    const f = fixture(); f.design.decisions = []; f.tasks.tasks = []; f.plan.verifiers = [];
+    const f = fixture(); f.architecture.decisions = []; f.tasks.tasks = []; f.plan.verifiers = [];
+    // Isolate Requirement priority policy from independent Product and planning coverage policies.
+    f.spec.completion_policy.product_coverage = { outcomes: false, success_criteria: false, evidence: false };
+    f.spec.completion_policy.planning_coverage = { architecture_implementation: false, program_design_exercised: false };
     f.requirements.requirements[0]!.priority = "should";
-    expect(trace(f).issues.filter((i) => i.code.endsWith("-missing"))).toEqual([]);
+    expect(trace(f).issues.filter((i) => i.requirement === "R1" && i.code.endsWith("-missing"))).toEqual([]);
     f.spec.completion_policy.traceability = "must-and-should";
     expect(trace(f).issues.map((i) => i.code)).toContain("requirement-implementation-missing");
     f.requirements.requirements[0]!.priority = "could";
-    expect(trace(f).issues.filter((i) => i.code.endsWith("-missing"))).toEqual([]);
+    expect(trace(f).issues.filter((i) => i.requirement === "R1" && i.code.endsWith("-missing"))).toEqual([]);
     f.spec.completion_policy.traceability = "all";
     expect(trace(f).issues.map((i) => i.code)).toContain("requirement-implementation-missing");
   });

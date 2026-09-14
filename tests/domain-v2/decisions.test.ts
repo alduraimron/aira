@@ -11,7 +11,7 @@ import { fixture, at, observed, human, metadata, hash, artifact } from "./fixtur
 
 function finding(severity: "info" | "warning" | "blocker" = "blocker") {
   return analysisFindingSchema.parse({ id: "finding_one", category: "security", severity, title: "Auth", description: "Missing access check",
-    subjects: [referenceOf(fixture().req)], disposition: { state: "unresolved" } });
+    subjects: [referenceOf(fixture().req)], targets: [{ kind: "requirement", id: "R1", artifact: referenceOf(fixture().req) }], disposition: { state: "unresolved" } });
 }
 describe("findings, human waivers and analysis eligibility", () => {
   test("unresolved blocker prevents eligibility; warnings do not", () => {
@@ -35,7 +35,7 @@ describe("findings, human waivers and analysis eligibility", () => {
   });
   test("only exact scope, policy-authorized human waiver satisfies blocker (INV-LINEAGE-003)", () => {
     const f = fixture(); f.review.analyses[0]!.findings = [finding()];
-    const waiver = humanWaiverSchema.parse({ schema: "aira.dev/human-waiver/v1", id: "waiver_one", spec_id: f.spec.id,
+    const waiver = humanWaiverSchema.parse({ schema: "aira.dev/human-waiver/v2", id: "waiver_one", spec_id: f.spec.id,
       actor: human, channel: "pi", operation: "operation_waive", policy: f.spec.decision_policy.identity,
       scope: { code: "unresolved-blocker", subject: "finding_one" }, subjects: [f.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")!],
       observed_generation: "9", committed_generation: "10", rationale: "Local development only, accepted risk", at });
@@ -71,13 +71,13 @@ describe("INV-APPROVAL-001/002/003: exact human decisions", () => {
     expect(approvalApplicability(record, record.subjects[0]!, { ...decisionContext(f.review), generation: specGenerationSchema.parse("11") }).map((i) => i.code)).toContain("approval-generation-inapplicable");
   });
   test.each(["hash", "lineage_hash"] as const)("changed %s makes an approval inapplicable", (field) => {
-    const f = fixture(), record = f.review.approvals[0]!, subject = f.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")!;
+    const f = fixture(), record = f.review.approvals.find((a) => a.subjects[0]!.artifact.kind === "requirements")!, subject = f.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")!;
     if (field === "hash") subject.artifact.hash = hash(301); else subject.lineage_hash = hash(302);
     expect(approvalApplicability(record, record.subjects[0]!, decisionContext(f.review)).length).toBeGreaterThan(0);
   });
   test("changed revision and explicit staleness invalidate approval", () => {
     const f = fixture(), record = f.review.approvals[0]!;
-    f.spec.lineage.invalidations.push({ schema: "aira.dev/artifact-invalidation/v1", subject: record.subjects[0]!.artifact, generation: f.spec.generation,
+    f.spec.lineage.invalidations.push({ schema: "aira.dev/artifact-invalidation/v2", subject: record.subjects[0]!.artifact, generation: f.spec.generation,
       reason: "Relevant new finding", created: f.spec.created });
     expect(approvalApplicability(record, record.subjects[0]!, decisionContext(f.review)).map((i) => i.code)).toContain("artifact-stale");
   });
@@ -88,29 +88,29 @@ describe("INV-APPROVAL-001/002/003: exact human decisions", () => {
   test.each(["model", "worker", "system"])("%s actor cannot satisfy human schema", (kind) => {
     expect(specApprovalRecordSchema.safeParse({ ...fixture().review.approvals[0]!, actor: { kind, id: "local" } }).success).toBe(false);
   });
-  test("quick integrated operation binds all three exact subjects and their applicability", () => {
+  test("quick integrated operation binds all six exact subjects and their applicability", () => {
     const f = fixture("quick"), record = f.review.approvals[0]!;
     expect(integratedApprovalApplicability(record, decisionContext(f.review))).toEqual([]);
     expect(specApprovalRecordSchema.safeParse({ ...record, subjects: record.subjects.slice(0, 2) }).success).toBe(false);
     f.spec.approval_applicability[2]!.status = "revoked";
     expect(integratedApprovalApplicability(record, decisionContext(f.review)).length).toBeGreaterThan(0);
   });
-  test("unchanged design-first content can carry approval after exact revalidation, without another human content decision", () => {
-    const f = fixture("design-first"), record = f.review.approvals.find((a) => a.subjects[0]!.artifact.kind === "design")!;
+  test("unchanged architecture-first content can carry approval after exact revalidation, without another human content decision", () => {
+    const f = fixture("architecture-first"), record = f.review.approvals.find((a) => a.subjects[0]!.artifact.kind === "architecture")!;
     const from = decisionContext(structuredClone(f.review));
     const next = artifact("requirements", "r2", [referenceOf(f.intent), referenceOf(f.des)], 451);
     const proof = artifact("analysis", "new_consistency", [referenceOf(f.des), referenceOf(next)], 452);
     f.review.revisions.push(next, proof);
-    f.review.analyses.push(analysisSchema.parse({ schema: "aira.dev/analysis/v1", spec_id: f.spec.id, revision: proof.id,
+    f.review.analyses.push(analysisSchema.parse({ schema: "aira.dev/analysis/v2", spec_id: f.spec.id, revision: proof.id,
       phase: "consistency", inputs: [referenceOf(f.des), referenceOf(next)], created: metadata, outcome: "consistent", findings: [] }));
     f.spec.artifacts.current.find((s) => s.artifact.kind === "requirements")!.artifact = referenceOf(next);
     f.spec.analyses.push(referenceOf(proof)); f.spec.generation = specGenerationSchema.parse("11");
-    f.spec.lineage.validations = [validationRecordSchema.parse({ schema: "aira.dev/lineage-validation/v1", relation: "validated_against", subject: referenceOf(f.des),
+    f.spec.lineage.validations = [validationRecordSchema.parse({ schema: "aira.dev/lineage-validation/v2", relation: "validated_against", subject: referenceOf(f.des),
       against: [referenceOf(next)], analysis: referenceOf(proof), outcome: "consistent", generation: "11", created: metadata })];
     expect(canCarryApproval(record, from, decisionContext(f.review))).toEqual([]);
     for (const binding of f.spec.approval_applicability) { binding.generation = f.spec.generation; binding.carried_from = from.generation; }
     expect(approvalApplicability(record, record.subjects[0]!, decisionContext(f.review))).toEqual([]);
-    expect(f.review.approvals).toHaveLength(3); expect(String(f.des.id)).toBe("rev_d1");
+    expect(f.review.approvals).toHaveLength(6); expect(String(f.des.id)).toBe("rev_d1");
   });
   test("carry-forward requires previously applicable exact subjects, never a wildcard", () => {
     const f = fixture(), record = f.review.approvals[0]!, from = decisionContext(f.review);
@@ -121,7 +121,7 @@ describe("INV-APPROVAL-001/002/003: exact human decisions", () => {
 describe("lineage-based revision requests", () => {
   const f = fixture();
   const feedback = " \tKeep café export.\r\nDo not trim this feedback.\n\n ";
-  const request = revisionRequestSchema.parse({ schema: "aira.dev/revision-request/v1", id: "revision_one", spec_id: f.spec.id,
+  const request = revisionRequestSchema.parse({ schema: "aira.dev/revision-request/v2", id: "revision_one", spec_id: f.spec.id,
     previous_artifact: referenceOf(f.req), feedback, actor: human, channel: "cli", requested_at: at, operation: "operation_revise", status: "pending" });
   test("exact feedback and exact previous revision/hash survive validation", () => {
     expect(request.feedback).toBe(feedback); expect(request.previous_artifact).toEqual(referenceOf(f.req));
@@ -138,6 +138,6 @@ describe("lineage-based revision requests", () => {
   });
   test("pending records cannot claim a resolution and versions fail closed", () => {
     expect(revisionRequestSchema.safeParse({ ...request, resolution: {} }).success).toBe(false);
-    expect(revisionRequestSchema.safeParse({ ...request, schema: "aira.dev/revision-request/v2" }).success).toBe(false);
+    expect(revisionRequestSchema.safeParse({ ...request, schema: "aira.dev/revision-request/v99" }).success).toBe(false);
   });
 });

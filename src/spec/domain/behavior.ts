@@ -27,7 +27,7 @@ export function validateSpecBehavioralBindings(spec: Spec, revisions: readonly A
       issues.push({ code: "behavioral-output-binding-mismatch", subject: binding.output.revision });
     if (binding.output.kind === "analysis") {
       const results = analyses.filter((a) => a.revision === binding.output.revision && a.spec_id === spec.id);
-      const expected = { requirements: "requirements-analysis", design: "design-analysis", tasks: "task-analysis", consistency: "design-analysis", "final-consistency": "final-spec-review" } as const;
+      const expected = { product: "product-analysis", "program-design": "program-design-analysis", "slice-plan": "slice-plan-analysis", requirements: "requirements-analysis", architecture: "architecture-analysis", tasks: "task-analysis", consistency: "architecture-analysis", "final-consistency": "final-spec-review" } as const;
       if (results.length !== 1 || expected[results[0]!.phase] !== binding.phase) issues.push({ code: "behavioral-analysis-phase-mismatch", subject: binding.output.revision });
     }
     issues.push(...validateBehavioralProfileSnapshot(snapshot, catalog, environment));
@@ -40,7 +40,7 @@ export function validateSpecBehavioralBindings(spec: Spec, revisions: readonly A
   return stableIssues(issues);
 }
 /** Profile adoption is semantic, not execution bookkeeping. History is append-only;
- * unchanged design-first output keeps its original authoring profile on revalidation.
+ * unchanged architecture-first output keeps its original authoring profile on revalidation.
  */
 export function validateSpecBehavioralEvolution(previous: Spec, next: Spec): DomainIssue[] {
   const issues: DomainIssue[] = [];
