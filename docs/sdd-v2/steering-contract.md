@@ -13,9 +13,12 @@ bindings, and causal staleness](steering-snapshot-05c3a.md). 05C-3B1 adds the
 [authoritative project registry and resource persistence](steering-store-05c3b1.md).
 05C-3B2 adds [immutable snapshot persistence and the combined storage audit](steering-store-05c3b2.md).
 05C-4A1 adds the read-only [native project source contract, exact-byte parser,
-and bounded inspection adapter](steering-native-source-05c4a1.md). Deferred
-adoption and interoperability adapters are not permission to substitute a weaker
-architecture.
+and bounded inspection adapter](steering-native-source-05c4a1.md). 05C-4A2A adds
+[explicit native-source adoption](steering-adoption-05c4a2a.md) through human
+authorization, exact source/registry freshness, and SteeringStore CAS. 05C-4A2B
+adds [safe authoritative native-source materialization](steering-materialization-05c4a2b.md)
+without changing authority. Deferred interoperability adapters are not permission
+to substitute a weaker architecture.
 
 `MUST`, `MUST NOT`, `REQUIRED`, and `SHOULD` are normative in this document.
 
@@ -857,11 +860,34 @@ authorize overrides. These policy semantics are version-pinned; the strict
 - read-only source proposals with no registry, BlobStore, resolver, or Context
   mutation.
 
-#### Deferred 05C-4A2 and 05C-4B
+#### 05C-4A2A: explicit native-source adoption, implemented
 
-- explicit authorized adoption, revision allocation, authoritative comparison,
-  registry CAS publication, and materialization;
-- template instantiation/adoption authentication;
+- immutable `aira.dev/steering-adoption-plan/v1` construction from exact native
+  source observations and exact registry authority;
+- explicit human authorization, worker self-modification rejection, source and
+  registry freshness checks, deterministic revision allocation, and one
+  SteeringStore CAS batch publication;
+- immutable project revision provenance that retains the exact adopted native
+  source observation;
+- no-op, partial-selection, cross-reference, and OperationId replay semantics;
+- no source deletion inference and no registry-to-file materialization.
+
+#### 05C-4A2B: authoritative native-source materialization, implemented
+
+- immutable `aira.dev/steering-materialization-plan/v1` construction from exact
+  registry authority, raw body blobs, and exact native target observations;
+- deterministic `aira.dev/steering-source/v1` rendering with exact body bytes
+  and parser-proven authorable semantic round trip;
+- create, unchanged, explicitly authorized replace, and human-preserving conflict
+  actions with authority and target freshness checks;
+- safe bound-directory creation and crash-safe per-file temporary, fsync, rename,
+  and directory-fsync publication with explicit partial-result semantics;
+- no Steering registry, generation, commit, revision, snapshot, or blob mutation.
+
+#### Deferred 05C-4B
+
+- template instantiation/materialization and template catalog authentication
+  beyond native project source adoption;
 - bounded, safe `AGENTS.md` interoperability;
 - Context-facing adapter inputs; worker and prompt delivery belongs to the later
   Context/worker integration stage, not 05C-4.

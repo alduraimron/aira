@@ -17,7 +17,9 @@
     "./pi": "./src/pi/index.ts",
     "./storage": "./src/storage/index.ts",
     "./storage/file": "./src/storage/file/index.ts",
-    "./steering-source": "./src/steering-source/index.ts"
+    "./steering-source": "./src/steering-source/index.ts",
+    "./steering-adoption": "./src/steering-adoption/index.ts",
+    "./steering-materialization": "./src/steering-materialization/index.ts"
   },
   "pi": {
     "extensions": [

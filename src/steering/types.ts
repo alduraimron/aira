@@ -18,6 +18,7 @@ import type {
   steeringCompatibilitySchema,
   steeringCompositionSchema,
   steeringLayerSchema,
+  steeringNativeSourceAttributionSchema,
   steeringOverrideSchema,
   steeringProvenanceSchema,
   steeringResourceKindSchema,
@@ -40,6 +41,7 @@ export type SteeringResourceKind = z.infer<typeof steeringResourceKindSchema>;
 export type SteeringLayer = z.infer<typeof steeringLayerSchema>;
 export type SteeringSourceReference = DeepReadonly<z.infer<typeof steeringSourceReferenceSchema>>;
 export type SteeringProvenance = DeepReadonly<z.infer<typeof steeringProvenanceSchema>>;
+export type SteeringNativeSourceAttribution = DeepReadonly<z.infer<typeof steeringNativeSourceAttributionSchema>>;
 export type SteeringRule = DeepReadonly<z.infer<typeof steeringRuleSchema>>;
 export type SteeringOverride = DeepReadonly<z.infer<typeof steeringOverrideSchema>>;
 export type SteeringComposition = DeepReadonly<z.infer<typeof steeringCompositionSchema>>;

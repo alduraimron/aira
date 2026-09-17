@@ -6,6 +6,7 @@ import {
   compareText,
   contentHashSchema,
   createdMetadataSchema,
+  exact,
   nonBlankSchema,
   profileReferenceSchema,
   safeUnsignedSchema,
@@ -22,6 +23,7 @@ import {
 } from "./authority";
 import {
   steeringCustomCategorySchema,
+  steeringResourceIdSchema,
   steeringRevisionIdSchema,
   steeringRevisionReferenceSchema,
   steeringRuleIdSchema,
@@ -68,14 +70,87 @@ export const steeringSourceReferenceSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const steeringNativeSourceContentSchema = z.strictObject({
+  hash: contentHashSchema,
+  bytes: safeUnsignedSchema,
+  media_type: z.literal("text/markdown; charset=utf-8"),
+});
+const steeringNativeSourceFilesystemSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("filesystem"),
+    device: z.string().regex(/^(0|[1-9][0-9]*)$/, "invalid-native-source-device"),
+    inode: z.string().regex(/^(0|[1-9][0-9]*)$/, "invalid-native-source-inode"),
+    links: safeUnsignedSchema.refine((value) => value > 0, "invalid-native-source-links"),
+    mode: safeUnsignedSchema,
+    size: safeUnsignedSchema,
+    modified_ns: z.string().regex(/^(0|[1-9][0-9]*)$/, "invalid-native-source-time"),
+    changed_ns: z.string().regex(/^(0|[1-9][0-9]*)$/, "invalid-native-source-time"),
+  }),
+  z.strictObject({ kind: z.literal("detached"), size: safeUnsignedSchema }),
+]);
+const steeringNativeSourcePathSchema = z.string().min(1).max(1_024)
+  .refine((value) => !value.startsWith("/") && !value.includes("\\") && !value.includes(":") &&
+    !/[\u0000-\u001f\u007f]/.test(value) && value.endsWith(".md") &&
+    value.split("/").every((part) => part !== "" && part !== "." && part !== ".."), "invalid-native-source-path");
+const steeringNativeSourceProvenanceSchema = z.strictObject({
+  kind: z.literal("native-project-source"),
+  project: steeringProjectNamespaceSchema,
+  authorship: z.enum(["authored", "adopted"]),
+  adopted_from: steeringSourceReferenceSchema.optional(),
+}).refine((value) => (value.authorship === "adopted") === (value.adopted_from !== undefined),
+  "invalid-native-source-adoption");
+
+/**
+ * Immutable attribution carried by an authoritative project revision after a
+ * native authoring source is explicitly adopted. It is source provenance, not
+ * a second resource or a materialization pointer.
+ */
+export const steeringNativeSourceAttributionSchema = z.strictObject({
+  schema: z.literal("aira.dev/steering-source-observation/v1"),
+  source_schema: z.literal("aira.dev/steering-source/v1"),
+  discovery: z.literal("aira.dev/steering-discovery/native/v1"),
+  project: steeringProjectNamespaceSchema,
+  // Adapters validate their own materialization root; pure provenance stores it as data.
+  control: z.strictObject({ steering_root: sourceIdentitySchema }),
+  source_path: steeringNativeSourcePathSchema,
+  identity: z.strictObject({
+    id: steeringResourceIdSchema,
+    kind: steeringResourceKindSchema,
+    custom_kind: steeringCustomCategorySchema.optional(),
+  }),
+  source: steeringNativeSourceContentSchema,
+  body: steeringNativeSourceContentSchema,
+  metadata_hash: contentHashSchema,
+  filesystem: steeringNativeSourceFilesystemSchema,
+  provenance: steeringNativeSourceProvenanceSchema,
+}).superRefine((value, ctx) => {
+  if (value.source.bytes !== value.filesystem.size)
+    ctx.addIssue({ code: "custom", path: ["filesystem", "size"], message: "native-source-size-mismatch" });
+  if (value.body.bytes > value.source.bytes)
+    ctx.addIssue({ code: "custom", path: ["body", "bytes"], message: "native-source-body-size-invalid" });
+  if ((value.identity.kind === "custom") !== (value.identity.custom_kind !== undefined))
+    ctx.addIssue({ code: "custom", path: ["identity", "custom_kind"], message: "invalid-steering-custom-kind" });
+  if (!/^(?:steering|project\.steering)\./.test(value.identity.id))
+    ctx.addIssue({ code: "custom", path: ["identity", "id"], message: "native-source-project-identity-required" });
+  if (value.provenance.project !== value.project)
+    ctx.addIssue({ code: "custom", path: ["provenance", "project"], message: "native-source-project-mismatch" });
+});
+
 export const steeringProvenanceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("project"),
     project: steeringProjectNamespaceSchema,
     authorship: z.enum(["authored", "adopted"]),
     adopted_from: steeringSourceReferenceSchema.optional(),
-  }).refine((value) => (value.authorship === "adopted") === (value.adopted_from !== undefined),
-    "invalid-project-steering-adoption"),
+    native_source: steeringNativeSourceAttributionSchema.optional(),
+  }).superRefine((value, ctx) => {
+    if ((value.authorship === "adopted") !== (value.adopted_from !== undefined))
+      ctx.addIssue({ code: "custom", message: "invalid-project-steering-adoption" });
+    if (value.native_source !== undefined && (value.native_source.project !== value.project ||
+      value.native_source.provenance.authorship !== value.authorship ||
+      !exact(value.native_source.provenance.adopted_from, value.adopted_from)))
+      ctx.addIssue({ code: "custom", message: "invalid-project-native-source-attribution" });
+  }),
   z.strictObject({
     kind: z.literal("aira-template"),
     publisher: z.literal("aira"),
