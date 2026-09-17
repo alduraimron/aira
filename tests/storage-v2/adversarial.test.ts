@@ -111,8 +111,9 @@ test("recovery cannot quarantine a same-token owner metadata replacement", async
   const x = await setup(); await launch(x.root, "lock-die", x.result.spec_id).done();
   const owner = await x.store.locks.owner(x.result.spec_id), immutable = x.store.fs.immutable.bind(x.store.fs);
   const spy = spyOn(x.store.fs, "immutable").mockImplementation(async (path, bytes) => {
-    await immutable(path, bytes);
+    const published = await immutable(path, bytes);
     if (path.endsWith("/recovery/owner.json")) await writeFile(join(x.store.fs.paths.lock(x.result.spec_id), "owner.json"), canonicalBytes({ ...owner, acquired_at: "2001-01-01T00:00:00.000Z" }));
+    return published;
   });
   try { await code(x.store.recoverLock(x.result.spec_id), "STORE_LOCK_OWNERSHIP"); } finally { spy.mockRestore(); }
   expect(await x.store.locks.owner(x.result.spec_id)).not.toBeNull();

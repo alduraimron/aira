@@ -10,8 +10,8 @@ export async function requestFile(root: string, transaction: StoreTransaction, b
   await writeFile(path, JSON.stringify({ transaction, blobs: blobs.map((b) => ({ hash: b.hash, hex: Buffer.from(b.bytes).toString("hex") })) }));
   return path;
 }
-export function launch(root: string, mode: string, argument: string, boundary = "", gate = "") {
-  const process = Bun.spawn([Bun.which("bun")!, worker, root, mode, argument, boundary, gate], { stdout: "pipe", stderr: "pipe" });
+export function launchWorker(workerPath: string, root: string, mode: string, argument: string, boundary = "", gate = "") {
+  const process = Bun.spawn([Bun.which("bun")!, workerPath, root, mode, argument, boundary, gate], { stdout: "pipe", stderr: "pipe" });
   const lines: Record<string, unknown>[] = [];
   const output = (async () => {
     let text = "";
@@ -39,4 +39,8 @@ export function launch(root: string, mode: string, argument: string, boundary = 
       return { exit, lines, last: lines.at(-1) };
     },
   };
+}
+
+export function launch(root: string, mode: string, argument: string, boundary = "", gate = "") {
+  return launchWorker(worker, root, mode, argument, boundary, gate);
 }

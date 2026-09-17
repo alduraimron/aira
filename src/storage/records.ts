@@ -92,6 +92,9 @@ export function rejectUnknownVersions(value: unknown): void {
   if (!value || typeof value !== "object") return;
   if ("schema" in value && typeof value.schema === "string" && value.schema.startsWith("aira.dev/") && !Object.hasOwn(recordSchemas, value.schema) &&
     !["aira.dev/store-head/v1", "aira.dev/store-commit/v1", "aira.dev/store-commit-payload/v1", "aira.dev/store-transaction/v1", "aira.dev/store-state/v1",
+      "aira.dev/steering-store-head/v1", "aira.dev/steering-store-commit/v1", "aira.dev/steering-store-commit-payload/v1",
+      "aira.dev/steering-store-transaction/v1", "aira.dev/steering-registry/v1", "aira.dev/steering-resource/v1",
+      "aira.dev/steering-snapshot/v1", "aira.dev/steering-snapshot-record/v1", "aira.dev/steering-snapshot-locator/v1",
       "aira.dev/evidence-applicability/exact-workspace/v1"].includes(value.schema))
     fail("STORE_SCHEMA_UNSUPPORTED", `Unsupported schema: ${value.schema}`);
   const object = value as Record<string, unknown>;

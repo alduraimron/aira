@@ -2,9 +2,12 @@
 
 Status: implemented in stage 4, adversarially hardened in stage 5. Stage 05B extends
 only domain dispatch/reference validation for the [planning model](planning-model.md).
-Affected domain schemas advance versions; old generic-design state fails closed as
-specified in [ADR-012](adr/012-canonical-planning-ontology.md). No storage protocol or
-FORMAT change is introduced. See the
+Stage 05C-3B1 reuses the certified primitives for the separate project
+[Steering registry](steering-store-05c3b1.md), and 05C-3B2 adds
+[immutable SteeringSnapshot persistence](steering-store-05c3b2.md), without
+changing existing Spec records or `FORMAT` bytes. Affected planning domain schemas advance versions; old
+generic-design state fails closed as specified in
+[ADR-012](adr/012-canonical-planning-ontology.md). See the
 [stage-5 audit](storage-audit-stage5.md) and separate
 [compatibility/migration contract](compatibility-migration-contract.md). This specifies the concrete encoding, layout and
 publication protocol selected under ADR-002/003. It does not supersede lifecycle,
@@ -17,10 +20,16 @@ The pure [domain contract](domain-contract.md) remains the structured data model
 immutable exact bytes and typed records -> immutable commit -> atomic HEAD
 ```
 
-One Spec's HEAD is its sole authoritative mutation publication point. Its selected
-commit contains the complete domain Spec, a set of complete domain execution runs,
-and exact references to immutable domain records and raw blobs. No independently
-updated approval, task, run, event or view file participates in authority.
+One Spec's HEAD is its sole authoritative Spec mutation publication point. Its
+selected commit contains the complete domain Spec, a set of complete domain
+execution runs, and exact references to immutable domain records and raw blobs.
+The separate project Steering HEAD is the sole authority for the project Steering
+registry described in [steering-store-05c3b1.md](steering-store-05c3b1.md).
+Immutable SteeringSnapshot records use content-addressed blobs and deterministic
+immutable locators described in [steering-store-05c3b2.md](steering-store-05c3b2.md);
+they do not advance or replace Steering HEAD. Neither aggregate infers authority
+from the other's HEAD. No independently updated
+approval, task, run, event or view file participates in authority.
 
 `src/storage/` defines provider-neutral ports, strict envelopes, domain record
 version dispatch, errors and storage CAS/generation rules. `src/storage/file/`
@@ -45,12 +54,21 @@ of access to control storage is still a required later execution-backend obligat
     commits/<full-64-hex>.json
     .head-tmp-<random-token>          # possible interrupted publication
     derived/                        # reserved, no views implemented
+  steering/
+    HEAD
+    commits/<full-64-hex>.json
+    snapshot-locators/<full-64-hex>.json
+    .head-tmp-<random-token>          # possible interrupted publication
   locks/specs/
     s-<hex-UTF8-SpecId>.lock/
       owner.json
       recovery/owner.json           # only during explicit stale recovery
     .stale-lock-<random-token>/       # retained owner/cleaner diagnostics
     .released-lock-<random-token>/    # possible interrupted release
+  locks/steering/
+    project.lock/
+      owner.json
+      recovery/owner.json             # only during explicit stale recovery
 ```
 
 Immutable publication temporaries use `.publish-tmp-<random-token>` beside their
@@ -70,7 +88,9 @@ mutation closed rather than silently choosing the most convenient marker.
 Spec keys are centrally validated and injectively encoded, not raw user strings.
 The encoding is reversible and case-insensitive-filesystem safe. Digest paths accept
 only the domain's lowercase `sha256:<64 hex>` identity. Filesystem enumeration is
-never a source of current sequence or state.
+never a source of current sequence or state. Steering logical resource and project
+identities are not inserted into physical path segments; the one project registry
+uses the fixed `steering/` authority path.
 
 ## Canonical bytes and structured records
 
@@ -134,8 +154,8 @@ CAS, generations, fsync barriers and crash recovery below are unchanged.
 `put(bytes)`, `get(hash)`, `exists(hash)` and `verify(hash)` operate on exact immutable
 uncompressed bytes. Put snapshots caller memory before yielding. The same generic
 store holds domain record envelopes, canonical artifact bodies, behavioral content,
-context content, command outputs and large audit/evidence payloads. There are no
-subsystem-specific blob namespaces or implicit Markdown assumptions.
+context content, SteeringSnapshot records, command outputs and large audit/evidence
+payloads. There are no subsystem-specific blob namespaces or implicit Markdown assumptions.
 
 Publication writes a same-directory exclusive temporary file, fsyncs the complete
 file, then uses an **exclusive hard link** to install the final identity. This is
@@ -222,8 +242,10 @@ operation index or last-writer-wins fallback exists.
 
 ## Cross-process ownership and stale recovery
 
-Per-Spec atomic directory creation is the writer primitive. Independent Specs have
-independent locks; there is no global mutation lock. Owner metadata has its own strict
+Atomic directory creation is the shared writer primitive. Independent Specs retain
+independent per-Spec locks. Project Steering uses a separate fixed project-registry
+lock, so Steering publication and unrelated Spec publication do not share one global
+mutation lock. Owner metadata has its own strict
 version, random token, PID, hostname, UTC acquisition time and process-table scope.
 Linux scope includes boot identity and PID namespace, avoiding unsafe ESRCH inference
 across containers sharing a hostname but not a process table. Missing/foreign scope,
@@ -292,9 +314,11 @@ History and operation lookup only traverse reachable parents. Loads do not enume
 all blob files or all historical commits. Operation lookup currently costs O(history);
 its API allows a future rebuildable index without changing authority.
 
-`inspectStorage` classifies reachable, orphaned, temporary, corrupt and unknown records.
-It never promotes a high-numbered/newest orphan, repairs HEAD, rewrites bytes or deletes
-files. Corrupt/racing roots make unproven orphans unknown. Its pinned-root inventory is
+`inspectStorage` classifies reachable, orphaned, temporary, corrupt and unknown records,
+including Steering commits, immutable snapshot locators, and locator-attributed snapshot
+record blobs. Unattributed shared blobs remain generic. It never promotes a
+high-numbered/newest orphan, repairs HEAD, rewrites bytes or deletes files.
+Corrupt/racing roots make unproven orphans unknown. Its pinned-root inventory is
 an observation, **not GC authorization**; active publication/pinned readers still need
 future GC coordination. Stale-lock diagnostics and publication temporaries are retained
 for explicit inspection. No materialized views or garbage collector are implemented.

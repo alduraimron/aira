@@ -20,6 +20,22 @@ Status: accepted, normative. Each `- INV-...: ...` line is one stable review/tes
 - INV-BUILTIN-007: Built-in assets are independently testable product code; complete production-grade content and its quality tests are required v2 release gates, as specified in release-completeness.md.
 - INV-DOC-001: A stable user-facing SDD capability is not release-complete until its conceptual and reference documentation exists; the documentation and end-to-end examples in release-completeness.md are product requirements, not optional polish.
 
+## Project Steering (ADR-013)
+
+- INV-STEER-001: Every Steering resource has a stable logical identity, immutable revision identity, and exact content hash independent of any materialization path.
+- INV-STEER-002: A resolved SteeringSnapshot pins exact Steering revisions and hashes; future Steering changes cannot alter the meaning of an existing snapshot.
+- INV-STEER-003: Steering authority is explicit and closed: descriptive, normative, or enforceable.
+- INV-STEER-004: Prose cannot claim technical enforcement without an explicit recognized machine-enforcement binding, and unavailable or incompatible required enforcement fails closed.
+- INV-STEER-005: Steering resolution and conflict handling are deterministic; conflicts that cannot be safely resolved fail closed rather than depending on file, insertion, prompt, timestamp, or write order.
+- INV-STEER-006: Project Steering and Spec artifacts remain separate domains with explicit project/source provenance and exact snapshot relationships.
+- INV-STEER-007: A worker cannot be trusted to publish, select, or redefine the Steering constraints governing its own operation.
+- INV-STEER-008: Missing or hash-mismatched required Steering referenced by a snapshot fails closed and cannot fall back to current files or revisions.
+- INV-STEER-009: Project, Aira-template, interoperability, and imported provenance cannot impersonate one another; template/import adoption creates an explicitly attributed project revision.
+- INV-STEER-010: Hierarchy and project overrides require exact declared relationships and provable semantic precedence; lower scopes cannot weaken enforceable or deny-wins capability restrictions.
+- INV-STEER-011: Steering inclusion and scope use explicit versioned selectors and declared resolution inputs; they do not grant capability or derive authority from filesystem placement.
+- INV-STEER-012: Steering staleness is causal to exact relevant resource/rule dependencies and scope; an unrelated Steering edit cannot retroactively mutate history or automatically invalidate every Spec.
+- INV-STEER-013: A structured Steering rule has stable identity and semantic key across revision evolution; retirement leaves a tombstone and retired identity cannot be reused.
+
 ## Storage and generations (ADR-002, ADR-003)
 
 - INV-STORE-001: At every recoverable crash boundary, authoritative state resolves to either the previous committed HEAD or the new committed HEAD, never a partially published aggregate.

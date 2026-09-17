@@ -87,8 +87,10 @@ applicability across unrelated upstream changes. Artifact approvals still bind c
 exact revision/hash subjects and explicitly carried Spec generations. No scoped evidence
 reuse or automatically transferable approval is introduced.
 
-Project Steering remains excluded. Future Context snapshots can supply exact Steering
-inputs without collapsing the six artifacts or reinterpreting their identities.
+Project Steering was excluded from stage 05B and remains a separate project-level
+domain. ADR-013 and the Steering contract now govern its staged implementation.
+Future Context snapshots can supply exact Steering inputs without collapsing the six
+artifacts or reinterpreting their identities.
 
 ## Relationship to earlier ADRs and invariants
 

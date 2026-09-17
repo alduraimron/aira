@@ -2,7 +2,9 @@
 
 Implementation stage 3, ADR-011 behavioral assets, stage-4/5 persistence, and the
 stage-05B [canonical planning model](planning-model.md) under
-[ADR-012](adr/012-canonical-planning-ontology.md). The latter explicitly retires the
+[ADR-012](adr/012-canonical-planning-ontology.md), and the stage-05C-1 pure
+[Project Steering foundation](steering-contract.md) under
+[ADR-013](adr/013-project-steering.md). ADR-012 explicitly retires the
 pre-release generic Design ontology and versions affected contracts. The
 [file storage foundation](storage-contract.md) retains its publication protocol.
 References below to deferred adapters do not imply storage is unimplemented.
@@ -60,6 +62,7 @@ Contract identifiers introduced:
 | Workspace | `workspace-handle`, `workspace-fingerprint`, `workspace-observation`, `execution-backend` |
 | Verification | `verification-plan`, `verifier`, `evidence`, `evidence-applicability/exact-workspace` |
 | Behavioral assets | `behavioral-asset`, `builtin-bundle`, `spec-kind-profile`, `mode-profile`, `behavioral-resolution-request`, `behavioral-resolution`, `behavioral-profile-snapshot` |
+| Project Steering | `steering-resource`; target later slices add `steering-snapshot` while embedded rules/inclusion/scope/bindings remain versioned by the resource envelope |
 
 `aira.dev/asset-bytes/raw/v1` separately identifies unnormalized effective asset bytes;
 self-identity envelopes are outside their content-hash subjects. `aira.dev/glob/v1`
@@ -88,6 +91,24 @@ SpecGeneration, RunGeneration, and FenceEpoch are separately branded canonical d
 **u64 strings**. Checked successor operations reject overflow. Byte sizes, capacities,
 and scheduling priorities are nonnegative safe integers, with positive bounds where
 required. No counter uses imprecise JSON floating-point storage.
+
+## Project Steering pure foundation
+
+`src/steering/` is a pure project-level domain separate from Spec artifacts,
+Context delivery, behavioral assets, and capability execution. Stage 05C-1 supplies
+logical resource/rule/revision/snapshot identities, the closed standard/custom kinds,
+immutable exact body references, provenance and adoption links, structured rule
+metadata, strict authority, typed Policy/Verifier/check/extension bindings, deterministic
+inclusion/scope declarations, hierarchy/override declarations, and stable structural
+validation issues.
+
+Only `aira.dev/steering-resource/v1` is independently persistable in the foundation;
+`aira.dev/steering-bytes/raw/v1` identifies exact unnormalized body bytes. Nested value
+objects do not receive fake standalone schema IDs. The target snapshot and resolver
+identities are reserved by the master contract, but no resolver, snapshot construction,
+filesystem discovery, storage publication, Context integration, worker integration, or
+runtime enforcement is implemented in 05C-1. See the master contract for exact later
+composition, conflict, snapshot, staleness, adapter, security and delivery semantics.
 
 ## Behavioral assets, profiles and exact attribution
 

@@ -1,6 +1,7 @@
 import { resolve, join, relative, isAbsolute, sep } from "node:path";
 import { specIdSchema, type SpecId } from "../../spec/domain/ids";
 import { contentHashSchema, type ContentHash } from "../../spec/domain/primitives";
+import { steeringSnapshotIdSchema, type SteeringSnapshotId } from "../../steering/ids";
 import { fail } from "../errors";
 
 /** Hex UTF-8 is injective, reversible and independent of case-insensitive filesystems. */
@@ -18,6 +19,11 @@ export function digest(hash: ContentHash): string {
   if (!contentHashSchema.safeParse(hash).success) fail("STORE_PATH_UNSAFE", "Invalid integrity identity");
   return hash.slice(7);
 }
+export function snapshotDigest(id: SteeringSnapshotId): string {
+  if (!steeringSnapshotIdSchema.safeParse(id).success || !/^steering_snapshot_[a-f0-9]{64}$/.test(id))
+    fail("STORE_PATH_UNSAFE", "Invalid persisted Steering snapshot identity");
+  return id.slice("steering_snapshot_".length);
+}
 export class StorePaths {
   readonly project: string;
   readonly root: string;
@@ -31,6 +37,16 @@ export class StorePaths {
   head(id: SpecId): string { return join(this.spec(id), "HEAD"); }
   commits(id: SpecId): string { return join(this.spec(id), "commits"); }
   commit(id: SpecId, hash: ContentHash): string { return join(this.commits(id), `${digest(hash)}.json`); }
+  steering(): string { return join(this.root, "steering"); }
+  steeringHead(): string { return join(this.steering(), "HEAD"); }
+  steeringCommits(): string { return join(this.steering(), "commits"); }
+  steeringCommit(hash: ContentHash): string { return join(this.steeringCommits(), `${digest(hash)}.json`); }
+  steeringSnapshotLocators(): string { return join(this.steering(), "snapshot-locators"); }
+  steeringSnapshotLocator(id: SteeringSnapshotId): string {
+    return join(this.steeringSnapshotLocators(), `${snapshotDigest(id)}.json`);
+  }
   locks(): string { return join(this.root, "locks", "specs"); }
   lock(id: SpecId): string { return join(this.locks(), `${specKey(id)}.lock`); }
+  steeringLocks(): string { return join(this.root, "locks", "steering"); }
+  steeringLock(): string { return join(this.steeringLocks(), "project.lock"); }
 }

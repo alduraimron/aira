@@ -7,13 +7,16 @@ import { taskDefinitionReferenceSchema } from "../execution/schema";
 import { workspaceRequirementsSchema } from "../workspace/schema";
 import { taskBehavioralSelectionsSchema } from "../builtins/roles";
 
+export const taskKinds = ["implementation", "test", "migration", "configuration", "documentation", "cleanup", "investigation", "custom"] as const;
+export const taskKindSchema = z.enum(taskKinds);
+
 export const completionConditionSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("verification"), verifier: verifierIdSchema }),
   z.strictObject({ kind: z.literal("artifact-published"), artifact: artifactReferenceSchema }),
 ]);
 export const taskDefinitionSchema = z.strictObject({
   schema: z.literal("aira.dev/task-definition/v2"), identity: taskDefinitionReferenceSchema,
-  title: nonBlankSchema, kind: z.enum(["implementation", "test", "migration", "configuration", "documentation", "cleanup", "investigation", "custom"]),
+  title: nonBlankSchema, kind: taskKindSchema,
   custom_kind: nonBlankSchema.optional(), description: nonBlankSchema, outcome: nonBlankSchema,
   requirements: z.array(requirementIdSchema), acceptance_criteria: z.array(acceptanceCriterionIdSchema),
   architecture_decisions: z.array(architectureDecisionIdSchema), program_design_decisions: z.array(programDesignDecisionIdSchema),

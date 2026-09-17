@@ -9,9 +9,11 @@ import { canonicalBytes, canonicalJSON, decodeCanonical } from "./canonical-json
 import { fileStoreFormat } from "../format";
 export { fileStoreFormat } from "../format";
 
-export type Failpoint = "after-lock-acquisition" | "after-blob-publication" | "after-commit-publication" |
+export type Failpoint = "after-lock-acquisition" | "after-steering-body-blob-publication" |
+  "after-steering-revision-record-publication" | "after-blob-publication" | "after-commit-publication" |
   "after-head-temp-write" | "after-head-temp-fsync" | "before-head-rename" | "after-head-rename" |
-  "after-head-directory-fsync" | "before-lock-release";
+  "after-head-directory-fsync" | "before-lock-release" | "after-snapshot-source-verification" |
+  "after-snapshot-record-publication" | "after-snapshot-locator-publication";
 /** Internal constructor injection only, never environment-controlled. */
 export interface FileStoreOptions {
   clock?: () => string;
@@ -95,7 +97,7 @@ export class DurableFS {
       fail("STORE_SCHEMA_UNSUPPORTED", "Conflicting control-root FORMAT requires explicit inspection");
     if ((await this.entries(dirname(this.paths.root))).some((name) => name !== "v2"))
       fail("STORE_SCHEMA_UNSUPPORTED", "Conflicting state version roots require explicit inspection");
-    if ((await this.entries(this.paths.root)).some((name) => !["FORMAT", "blobs", "specs", "locks"].includes(name) && !/^\.publish-tmp-[a-f0-9]{32,64}$/.test(name)))
+    if ((await this.entries(this.paths.root)).some((name) => !["FORMAT", "blobs", "specs", "steering", "locks"].includes(name) && !/^\.publish-tmp-[a-f0-9]{32,64}$/.test(name)))
       fail("STORE_SCHEMA_UNSUPPORTED", "Unknown v2 control namespace requires explicit inspection");
     await this.ensureDir(this.paths.root);
     const format = join(this.paths.root, "FORMAT");
@@ -144,7 +146,13 @@ export class DurableFS {
   async temp(path: string, bytes: Uint8Array, head = false): Promise<string> {
     await this.check(path, "directory");
     const name = join(path, `${head ? ".head-tmp-" : ".publish-tmp-"}${this.token()}`);
-    const h = await open(name, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    let h;
+    try { h = await open(name, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch (error) {
+      if (errno(error, "EEXIST") || errno(error, "ELOOP"))
+        fail("STORE_PATH_UNSAFE", "Exclusive publication temporary target already exists");
+      throw error;
+    }
     try {
       await h.writeFile(bytes);
       if (head) await this.point("after-head-temp-write");
@@ -154,9 +162,10 @@ export class DurableFS {
     return name;
   }
   /** Publish complete fsynced inode via exclusive link. A killed writer cannot poison an identity with a partial file. */
-  async immutable(path: string, bytes: Uint8Array): Promise<void> {
+  async immutable(path: string, bytes: Uint8Array): Promise<boolean> {
     await this.ensureDir(dirname(path));
     const temp = await this.temp(dirname(path), bytes);
+    let published = true;
     try {
       await this.check(dirname(path), "directory");
       try { await link(temp, path); }
@@ -165,11 +174,13 @@ export class DurableFS {
           if (["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV"].some((c) => errno(error, c))) fail("STORE_DURABILITY_UNSUPPORTED", "Exclusive immutable publication unavailable");
           throw error;
         }
+        published = false;
         const existing = await this.read(path);
         if (!Buffer.from(existing).equals(Buffer.from(bytes))) fail("STORE_INTEGRITY", "Immutable identity collision");
         await this.syncFile(path);
       }
       await this.syncDir(dirname(path));
+      return published;
     } finally { await unlink(temp); await this.syncDir(dirname(path)); }
   }
   async replaceHead(path: string, bytes: Uint8Array, assertOwner: () => Promise<void> = async () => {}): Promise<void> {

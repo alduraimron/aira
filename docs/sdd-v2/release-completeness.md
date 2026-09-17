@@ -58,6 +58,35 @@ and quick have explicit production-grade mode configuration where behavior diffe
 while retaining the same canonical artifacts and hard lifecycle rules. Tests MUST
 establish that kind/mode distinctions are meaningful, not just renamed minimal aliases.
 
+## Project Steering
+
+Under [ADR-013](adr/013-project-steering.md) and the normative
+[Steering contract](steering-contract.md), v2 MUST ship production-grade Project
+Steering support. At minimum the final release requires:
+
+- product Steering template or production generator guidance;
+- architecture Steering template or production generator guidance;
+- technology Steering template or production generator guidance;
+- repository-structure Steering template or production generator guidance;
+- engineering-standards Steering template or production generator guidance;
+- testing-standards Steering template or production generator guidance;
+- security-standards Steering template or production generator guidance;
+- operations Steering template or production generator guidance;
+- custom Steering authoring and category documentation;
+- inclusion, phase/path/Spec-kind/task-kind/manual selection, and scope documentation;
+- descriptive, normative, enforceable, and machine-binding documentation;
+- hierarchy, project override, non-weakening, and conflict-resolution documentation;
+- `AGENTS.md` interoperability, trust, and exact-byte provenance documentation;
+- SteeringSnapshot, historical provenance, integrity, and causal-staleness documentation;
+- complete native, scoped, custom, imported, conflict, enforcement, and snapshot examples.
+
+Templates are initialization sources and MUST NOT become project authority until an
+explicit project instantiation/adoption operation. Empty generic placeholders, eight
+files with renamed boilerplate, unpinned prompt injection, or prose presented as hard
+enforcement do not satisfy release completeness. Content quality, exact attribution,
+conflict behavior, safe adapters, snapshot reproducibility, and adversarial tests are
+release gates. The 05C-1 pure contract does not claim these later gates are complete.
+
 ## Context, capabilities, verification and execution
 
 Context templates/profiles MUST cover at least **product**, **architecture**,
@@ -78,8 +107,10 @@ reference documentation exists. At minimum v2 MUST ship documentation for:
 - getting started;
 - the conceptual SDD model;
 - Specs, Product versus Requirements, System Architecture versus Program Design, and Vertical Slices versus Tasks;
+- Project Steering concepts, kinds, authority, hierarchy, scopes, inclusion, overrides, conflicts, snapshots, and staleness;
+- native/custom Steering authoring, project adoption, exact provenance, and `AGENTS.md` interoperability;
 - approvals and revisions;
-- context;
+- context and its exact boundary with Steering;
 - capabilities and security;
 - verification and evidence;
 - execution and recovery;
@@ -104,8 +135,13 @@ Release-tested examples MUST include:
 6. migration;
 7. revision causing staleness and regeneration;
 8. interrupted and recovered execution;
-9. capability denial and escalation.
+9. capability denial and escalation;
+10. native root plus scoped Steering with a valid explicit specialization;
+11. unresolved Steering conflict that fails closed and an enforceable denial that cannot be weakened;
+12. explicit `AGENTS.md` interoperability with exact provenance and native-policy conflict;
+13. a relevant Steering change causing targeted staleness while an unrelated Spec remains applicable.
 
 Examples must exercise the production built-in library and show exact versioned asset
-attribution, authentic approval/state transitions and relevant safety behavior. Their
-implementation belongs to later content/integration stages, not this pure-domain change.
+and Steering attribution, authentic approval/state transitions and relevant safety
+behavior. Their implementation belongs to later content/integration stages, not this
+pure-domain change.

@@ -4,7 +4,8 @@ import path from "node:path";
 import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "../../src");
-const domain = (p: string) => /^(spec\/domain|builtins|tasks|revision|capabilities|verification|workspace|execution)\//.test(p) ||
+const domain = (p: string) => p === "canonical-json.ts" ||
+  /^(spec\/domain|builtins|steering|tasks|revision|capabilities|verification|workspace|execution)\//.test(p) ||
   /^(approval\/spec-(records|policy)|context\/(declarations|snapshot))\.ts$/.test(p);
 async function files(dir: string): Promise<string[]> {
   const result: string[] = [];

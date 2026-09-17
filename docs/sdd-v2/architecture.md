@@ -18,6 +18,13 @@ This is the primary domain hierarchy, not a requirement that authoring always st
 
 The generic workflow engine remains available as a lower-level recipe executor and for standalone operations. Workflow state is not the Spec lifecycle. AiraCore remains the application boundary; frontends call Core, and Core coordinates domain decisions and infrastructure through ports. Spec Core MUST NOT depend on Pi SDK types.
 
+Project Steering is a separate project-level domain above Specs. It supplies versioned,
+content-addressed project knowledge and constraints through exact resolved snapshots; it
+is not Spec-owned, generic prompt text, behavioral asset content, capability authority,
+or the whole Context system. Its complete staged target is the normative
+[Project Steering contract](steering-contract.md) under
+[ADR-013](adr/013-project-steering.md).
+
 ## First persistence contract: required concepts
 
 These are required representational capabilities from the first v2 schema, not optional future migrations. Exact field spelling and serialization are deferred to implementation ADRs consistent with this contract.
@@ -27,6 +34,7 @@ These are required representational capabilities from the first v2 schema, not o
 | Spec lifecycle | Requirements-first, architecture-first, and quick modes; intent; current/proposed/superseded applicability; completion state |
 | Canonical artifacts | Product Definition, Requirements, System Architecture, Program Design, Vertical Slice Plan, Task DAG; distinct schemas and immutable revision/hash identities; stable O/SC/R/AC/A/PD/S/T/V IDs and tombstones |
 | Behavioral assets | Immutable versioned Aira/project asset identities, content hashes, provenance, compatibility, bundle manifests, closed role selections, kind/mode profiles, exact pins and phase-specific Spec/run/attempt attribution; never mutable filenames/default aliases |
+| Project Steering | Project-level logical resource/rule identities, immutable revisions and hashes, explicit authority/provenance, typed enforcement links, deterministic inclusion/scope/hierarchy/conflicts, and exact Steering snapshots separate from Spec artifacts and Context delivery |
 | Relationships | Typed lineage (`derived_from` distinct from `validated_against`); traceability; downstream invalidation and recorded revalidation |
 | Human decisions | Exact-bound approvals, revision requests/feedback/resolutions, policy-authorized waivers, actor and channel provenance |
 | Analysis | Immutable findings/results bound to analyzed revisions; finding severity/policy obligations, resolution and applicability |
@@ -109,6 +117,7 @@ CLI / Pi frontend -> Core application -> domain decisions + provider-neutral por
 | --- | --- |
 | `src/spec/domain/**` | Pure Spec domain; no filesystem, Pi, CLI, or workflow executor imports |
 | `src/builtins/**` | Pure behavioral asset identities, revisions, provenance, typed role/profile selection, bundle manifests, exact pins, compatibility and deterministic resolution; no content loading or generated Spec artifacts |
+| `src/steering/**` | Pure project Steering identities, immutable revision/rule schemas, authority, enforcement linkage, provenance, scope/inclusion and future-composition declarations; no filesystem discovery, Context resolver, storage adapter, worker, CLI or Pi dependency |
 | `src/tasks/**` | Task definitions/schema, graph validation, deterministic readiness; pure definitions separate from execution effects |
 | `src/approval/**` | Keep legacy generic recipe approvals separate from v2 Spec approval records/applicability; no automatic conversion between them |
 | `src/revision/**` | Spec revision requests/resolutions and downstream invalidation semantics |
@@ -151,3 +160,4 @@ The existing v1 atomic replacement, mutable artifact paths, generic approvals, s
 10. [Workspace and execution backends](adr/010-workspace-and-execution-backends.md)
 11. [Versioned built-in assets and behavioral profiles](adr/011-versioned-behavioral-assets.md)
 12. [Canonical planning ontology and explicit pre-release schema retirement](adr/012-canonical-planning-ontology.md)
+13. [Versioned project Steering above Specs](adr/013-project-steering.md)

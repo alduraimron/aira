@@ -16,7 +16,8 @@
     "./agent": "./src/agent/index.ts",
     "./pi": "./src/pi/index.ts",
     "./storage": "./src/storage/index.ts",
-    "./storage/file": "./src/storage/file/index.ts"
+    "./storage/file": "./src/storage/file/index.ts",
+    "./steering-source": "./src/steering-source/index.ts"
   },
   "pi": {
     "extensions": [

@@ -4,13 +4,14 @@ import path from "node:path";
 import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "../../src");
-const domainFile = (file: string): boolean => /^(spec\/domain|builtins|tasks|revision|capabilities|verification|workspace|execution)\//.test(file) ||
+const domainFile = (file: string): boolean => file === "canonical-json.ts" ||
+  /^(spec\/domain|builtins|steering|tasks|revision|capabilities|verification|workspace|execution)\//.test(file) ||
   /^(approval\/spec-(records|policy)|context\/(declarations|snapshot))\.ts$/.test(file);
 // Stage 4 adds an explicit v2 adapter boundary, not another legacy runtime module.
 const storageFile = (file: string): boolean => file.startsWith("storage/");
-// Stage 5 adds explicit read/query and pure migration composition ABOVE the domains.
+// Explicit read/query, migration, and Steering source adapters sit ABOVE the domains.
 // Frozen legacy/v1 is deliberately not included: it must remain independent.
-const compositionFile = (file: string): boolean => /^(compatibility|migration)\//.test(file);
+const compositionFile = (file: string): boolean => /^(compatibility|migration|steering-source)\//.test(file);
 async function files(directory: string): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
