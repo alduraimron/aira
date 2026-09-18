@@ -884,11 +884,25 @@ authorize overrides. These policy semantics are version-pinned; the strict
   and directory-fsync publication with explicit partial-result semantics;
 - no Steering registry, generation, commit, revision, snapshot, or blob mutation.
 
-#### Deferred 05C-4B
+#### 05C-4B1: read-only AGENTS.md interoperability discovery, implemented
+
+- versioned exact-byte `AGENTS.md` observations with explicit interoperability
+  provenance and no native logical resource identity;
+- bounded, symlink-safe root and nested discovery, strict UTF-8/NUL validation,
+  exact source hashes, and deterministic lexical scopes;
+- pure broadest-to-nearest per-target applicability and structural common versus
+  path-specific grouping, without prose parsing or native override authority;
+- exact observation freshness comparison and a proposal-shaped observation
+  contract for later explicit import;
+- no Steering registry, generation, commit, revision, snapshot, BlobStore,
+  resolver, Context, worker, CLI, Pi, or source-file mutation.
+
+#### Deferred 05C-4B2 and related 05C-4 work
 
 - template instantiation/materialization and template catalog authentication
   beyond native project source adoption;
-- bounded, safe `AGENTS.md` interoperability;
+- explicit authorized AGENTS interoperability composition/import and any
+  versioned source-to-resource mapping;
 - Context-facing adapter inputs; worker and prompt delivery belongs to the later
   Context/worker integration stage, not 05C-4.
 

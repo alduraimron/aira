@@ -9,10 +9,10 @@ const domainFile = (file: string): boolean => file === "canonical-json.ts" ||
   /^(approval\/spec-(records|policy)|context\/(declarations|snapshot))\.ts$/.test(file);
 // Stage 4 adds an explicit v2 adapter boundary, not another legacy runtime module.
 const storageFile = (file: string): boolean => file.startsWith("storage/");
-// Explicit read/query, migration, Steering source, adoption, and materialization
-// adapters sit ABOVE the domains. Frozen legacy/v1 is deliberately not included:
+// Explicit read/query, migration, Steering source, AGENTS interoperability,
+// adoption, and materialization adapters sit ABOVE the domains. Frozen legacy/v1 is deliberately not included:
 // it must remain independent.
-const compositionFile = (file: string): boolean => /^(compatibility|migration|steering-source|steering-adoption|steering-materialization)\//.test(file);
+const compositionFile = (file: string): boolean => /^(compatibility|migration|steering-source|steering-agents|steering-adoption|steering-materialization)\//.test(file);
 async function files(directory: string): Promise<string[]> {
   const result: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
