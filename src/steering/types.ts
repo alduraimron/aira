@@ -15,6 +15,8 @@ import type {
   steeringRuleEffectSchema,
 } from "./authority";
 import type {
+  steeringAgentsImportPolicyPinSchema,
+  steeringAgentsInteropAttributionSchema,
   steeringCompatibilitySchema,
   steeringCompositionSchema,
   steeringLayerSchema,
@@ -41,6 +43,8 @@ export type SteeringResourceKind = z.infer<typeof steeringResourceKindSchema>;
 export type SteeringLayer = z.infer<typeof steeringLayerSchema>;
 export type SteeringSourceReference = DeepReadonly<z.infer<typeof steeringSourceReferenceSchema>>;
 export type SteeringProvenance = DeepReadonly<z.infer<typeof steeringProvenanceSchema>>;
+export type SteeringAgentsInteropAttribution = DeepReadonly<z.infer<typeof steeringAgentsInteropAttributionSchema>>;
+export type SteeringAgentsImportPolicyPin = DeepReadonly<z.infer<typeof steeringAgentsImportPolicyPinSchema>>;
 export type SteeringNativeSourceAttribution = DeepReadonly<z.infer<typeof steeringNativeSourceAttributionSchema>>;
 export type SteeringRule = DeepReadonly<z.infer<typeof steeringRuleSchema>>;
 export type SteeringOverride = DeepReadonly<z.infer<typeof steeringOverrideSchema>>;

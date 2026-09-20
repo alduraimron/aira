@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { behavioralAssetReferenceSchema } from "../builtins/assets";
+import { exactPathSchema } from "../context/declarations";
 import {
   blobReferenceSchema,
   canonical,
@@ -49,18 +50,94 @@ export const steeringProjectNamespaceSchema = z.string().max(63)
 const sourceIdentitySchema = z.string().max(500)
   .refine((value) => value.trim().length > 0 && !/[\u0000-\u001f\u007f]/.test(value), "invalid-steering-source-identity");
 
+const agentsSourceIdentitySchema = z.string()
+  .regex(/^agents_source_[a-f0-9]{64}$/, "invalid-steering-agents-source-identity");
+const agentsObservationIdentitySchema = z.string()
+  .regex(/^agents_observation_[a-f0-9]{64}$/, "invalid-steering-agents-observation-identity");
+// Keep the pure resource schema independent from the filesystem adapter's literal filename token.
+const agentsFilename = ["AGENTS", "md"].join(".");
+const agentsSourcePathSchema = exactPathSchema.max(1_024)
+  .refine((value) => value.split("/").at(-1) === agentsFilename, "invalid-steering-agents-source-path");
+const agentsScopeRootSchema = z.union([z.literal("."), exactPathSchema.max(1_024)]);
+const agentsSourceContentSchema = z.strictObject({
+  hash: contentHashSchema,
+  bytes: safeUnsignedSchema,
+  media_type: z.literal("text/markdown; charset=utf-8"),
+});
+const agentsScopeDepth = (scopeRoot: string): number => scopeRoot === "." ? 0 : scopeRoot.split("/").length;
+const agentsScopeRootForPath = (sourcePath: string): string => {
+  const parts = sourcePath.split("/");
+  parts.pop();
+  return parts.length === 0 ? "." : parts.join("/");
+};
+
+/**
+ * Exact adapter attribution for raw interoperability guidance. Raw bytes remain the
+ * ordinary resource body; this value pins the reviewed 05C-4B1 observation
+ * descriptor and versioned import mapping without making prose structured.
+ */
+export const steeringAgentsInteropAttributionSchema = z.strictObject({
+  schema: z.literal("aira.dev/steering-agents-observation/v1"),
+  discovery_policy: z.literal("aira.dev/steering-agents-discovery/v1"),
+  project: steeringProjectNamespaceSchema,
+  control: z.strictObject({ root: z.literal(".") }),
+  source_path: agentsSourcePathSchema,
+  source_identity: agentsSourceIdentitySchema,
+  observation_identity: agentsObservationIdentitySchema,
+  scope: z.strictObject({
+    root: agentsScopeRootSchema,
+    depth: safeUnsignedSchema,
+  }),
+  source: agentsSourceContentSchema,
+  content_encoding: z.literal("aira.dev/steering-bytes/raw/v1"),
+  text_encoding: z.literal("utf-8"),
+  provenance: z.strictObject({
+    schema: z.literal("aira.dev/steering-agents-provenance/v1"),
+    kind: z.literal("interoperability"),
+    source_type: z.literal(agentsFilename),
+    source_path: agentsSourcePathSchema,
+    source_hash: contentHashSchema,
+    scope_root: agentsScopeRootSchema,
+    discovery_policy: z.literal("aira.dev/steering-agents-discovery/v1"),
+  }),
+}).superRefine((value, ctx) => {
+  const expectedRoot = agentsScopeRootForPath(value.source_path);
+  if (value.scope.root !== expectedRoot || value.scope.depth !== agentsScopeDepth(expectedRoot))
+    ctx.addIssue({ code: "custom", path: ["scope"], message: "steering-agents-attribution-scope-mismatch" });
+  if (value.provenance.source_path !== value.source_path || value.provenance.source_hash !== value.source.hash ||
+    value.provenance.scope_root !== value.scope.root || value.provenance.discovery_policy !== value.discovery_policy)
+    ctx.addIssue({ code: "custom", path: ["provenance"], message: "steering-agents-attribution-provenance-mismatch" });
+});
+
+export const steeringAgentsImportPolicyPinSchema = z.strictObject({
+  contract: versionedContractSchema,
+  hash: contentHashSchema,
+});
+
+const steeringAgentsSourceReferenceSchema = z.strictObject({
+  kind: z.literal("agents-md"),
+  source_identity: sourceIdentitySchema,
+  source_revision: nonBlankSchema.optional(),
+  hash: contentHashSchema,
+  adapter: profileReferenceSchema,
+  agents_observation: steeringAgentsInteropAttributionSchema.optional(),
+  import_policy: steeringAgentsImportPolicyPinSchema.optional(),
+}).superRefine((value, ctx) => {
+  if ((value.agents_observation === undefined) !== (value.import_policy === undefined))
+    ctx.addIssue({ code: "custom", message: "steering-agents-import-attribution-incomplete" });
+  const attribution = value.agents_observation;
+  if (attribution === undefined) return;
+  if (value.source_identity !== attribution.source_identity || value.source_revision !== attribution.observation_identity ||
+    value.hash !== attribution.source.hash)
+    ctx.addIssue({ code: "custom", message: "steering-agents-import-attribution-mismatch" });
+});
+
 export const steeringSourceReferenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("steering-revision"),
     revision: steeringRevisionReferenceSchema,
   }),
-  z.strictObject({
-    kind: z.literal("agents-md"),
-    source_identity: sourceIdentitySchema,
-    source_revision: nonBlankSchema.optional(),
-    hash: contentHashSchema,
-    adapter: profileReferenceSchema,
-  }),
+  steeringAgentsSourceReferenceSchema,
   z.strictObject({
     kind: z.literal("imported"),
     contract: versionedContractSchema,
@@ -337,6 +414,8 @@ export type SteeringResourceKindValue = z.infer<typeof steeringResourceKindSchem
 export type SteeringRuleValue = z.infer<typeof steeringRuleSchema>;
 export type SteeringProvenanceValue = z.infer<typeof steeringProvenanceSchema>;
 export type SteeringSourceReferenceValue = z.infer<typeof steeringSourceReferenceSchema>;
+export type SteeringAgentsInteropAttributionValue = z.infer<typeof steeringAgentsInteropAttributionSchema>;
+export type SteeringAgentsImportPolicyPinValue = z.infer<typeof steeringAgentsImportPolicyPinSchema>;
 export type SteeringOverrideValue = z.infer<typeof steeringOverrideSchema>;
 export type SteeringResourceRevisionValue = z.infer<typeof steeringResourceRevisionSchema>;
 

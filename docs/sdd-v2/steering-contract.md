@@ -686,7 +686,7 @@ identify actual revision/hash inputs and later evidence; this slice runs none.
 - additional scoped `AGENTS.md` sources require an explicit stable logical
   resource mapping and scope declaration, so their Steering identity is not a
   hidden derivative of a filesystem path;
-- moving a mapped source changes source provenance, not its logical identity;
+- under the implemented 05C-4B2 v1 location mapping, moving a mapped source creates a new imported logical resource and does not retire the old one; a future explicit migration may define identity preservation;
 - arbitrary prose imports as descriptive or normative guidance at most;
   enforceable authority requires explicit project adoption plus real bindings;
 - native Steering conflict rules apply, and direct interoperability can never
@@ -897,12 +897,28 @@ authorize overrides. These policy semantics are version-pinned; the strict
 - no Steering registry, generation, commit, revision, snapshot, BlobStore,
   resolver, Context, worker, CLI, Pi, or source-file mutation.
 
-#### Deferred 05C-4B2 and related 05C-4 work
+#### 05C-4B2: explicit AGENTS interoperability import, implemented
+
+- immutable `aira.dev/steering-agents-import-plan/v1` construction from exact
+  05C-4B1 observations, an explicit versioned source-location mapping policy,
+  and exact registry authority;
+- human-only authorization, selected-source reinspection, two-dimensional
+  source and registry freshness, deterministic raw-guidance revision
+  construction, and one SteeringStore CAS batch publication;
+- ordinary custom/interoperability Steering resources with exact raw AGENTS body
+  bytes, explicit attribution, normative authority ceiling, no structured
+  rules, no enforcement bindings, and no native override authority;
+- resolver-compatible selected resources and preserved exact provenance through
+  SteeringSnapshot history, without Context or worker delivery; and
+- no source disappearance retirement, no prose interpretation, and no
+  location-move identity preservation under v1.
+
+See [05C-4B2 AGENTS import](steering-agents-import-05c4b2.md).
+
+#### Deferred related 05C-4 work
 
 - template instantiation/materialization and template catalog authentication
   beyond native project source adoption;
-- explicit authorized AGENTS interoperability composition/import and any
-  versioned source-to-resource mapping;
 - Context-facing adapter inputs; worker and prompt delivery belongs to the later
   Context/worker integration stage, not 05C-4.
 
