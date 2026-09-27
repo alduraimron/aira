@@ -30,6 +30,10 @@ immutable locators described in [steering-store-05c3b2.md](steering-store-05c3b2
 they do not advance or replace Steering HEAD. Neither aggregate infers authority
 from the other's HEAD. No independently updated
 approval, task, run, event or view file participates in authority.
+The target [WorkspaceProvider contract](workspace-contract.md) introduces a distinct
+future WorkspaceStore HEAD for project-wide workspace lifecycle and fencing.
+SpecStore/SteeringStore do not already provide it. Future run/workspace claim
+coordination must check both authorities; separate HEADs are not one atomic commit.
 
 `src/storage/` defines provider-neutral ports, strict envelopes, domain record
 version dispatch, errors and storage CAS/generation rules. `src/storage/file/`

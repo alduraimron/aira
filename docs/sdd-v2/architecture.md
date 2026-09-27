@@ -25,6 +25,13 @@ or the whole Context system. Its complete staged target is the normative
 [Project Steering contract](steering-contract.md) under
 [ADR-013](adr/013-project-steering.md).
 
+WorkspaceProvider is a distinct provider-neutral execution-project domain under the
+[Stage 06 master contract](workspace-contract.md) and
+[ADR-014](adr/014-workspace-provider.md). Trusted control-root state and mutable
+execution-root project content have separate roles, even in-place. WorkspaceStore,
+not a Spec/Steering record or directory name, owns workspace lifecycle authority.
+This contract is target architecture, not an implemented Stage 06 runtime.
+
 ## First persistence contract: required concepts
 
 These are required representational capabilities from the first v2 schema, not optional future migrations. Exact field spelling and serialization are deferred to implementation ADRs consistent with this contract.
@@ -99,7 +106,7 @@ Commit sequence orders every committed transaction. Spec generation changes only
 
 Evidence is immutable and binds verifier revision/hash, Spec artifact revisions, task definition revision, attempt, workspace fingerprint, backend, timestamps, outcome, and output references/hashes. Initially only an exactly matching workspace fingerprint is applicable; changed workspace state makes prior evidence historical, not current completion evidence. Future scoped applicability must preserve evidence identity semantics. See [ADR-007](adr/007-verification-applicability.md).
 
-Capability policy is provider-neutral, deny-wins, and fail-closed. Tool implementation/provenance matters, and resolved paths must be enforced at actual I/O boundaries. Host-permission arbitrary shell defeats filesystem confinement; Pi `tool_call` hooks are not a shell sandbox. Required hard backend capabilities cannot degrade into prompt advice. Workspace isolation is separate from process sandboxing. See [ADR-006](adr/006-capability-enforcement.md) and [ADR-010](adr/010-workspace-and-execution-backends.md).
+Capability policy is provider-neutral, deny-wins, and fail-closed. Tool implementation/provenance matters, and resolved paths must be enforced at actual I/O boundaries. Host-permission arbitrary shell defeats filesystem confinement; Pi `tool_call` hooks are not a shell sandbox. Required hard backend capabilities cannot degrade into prompt advice. Workspace topology isolation is separate from process sandboxing. [ADR-014](adr/014-workspace-provider.md) defines source/base/overlay provenance, versioned fingerprints, exclusive workspace claims, explicit recovery and fail-closed disposal; it does not implement runtime confinement. See [ADR-006](adr/006-capability-enforcement.md), [ADR-010](adr/010-workspace-and-execution-backends.md) and the [WorkspaceProvider master contract](workspace-contract.md).
 
 Current Aira worker attempts create fresh disposable Pi **in-memory sessions**, not necessarily fresh OS processes. AgentRuntime remains provider-neutral. Strong termination may require a supervised backend outside that in-process boundary. Interrupted external effects may have an `unknown` outcome, with retries/reconciliation/human intervention governed by declared recovery characteristics, never an exactly-once promise. See [ADR-009](adr/009-interrupted-side-effects.md).
 
@@ -161,3 +168,4 @@ The existing v1 atomic replacement, mutable artifact paths, generic approvals, s
 11. [Versioned built-in assets and behavioral profiles](adr/011-versioned-behavioral-assets.md)
 12. [Canonical planning ontology and explicit pre-release schema retirement](adr/012-canonical-planning-ontology.md)
 13. [Versioned project Steering above Specs](adr/013-project-steering.md)
+14. [Exact WorkspaceProvider provenance and fenced lifecycle](adr/014-workspace-provider.md)

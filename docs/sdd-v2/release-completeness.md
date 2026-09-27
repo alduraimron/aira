@@ -114,6 +114,7 @@ reference documentation exists. At minimum v2 MUST ship documentation for:
 - capabilities and security;
 - verification and evidence;
 - execution and recovery;
+- workspaces, dirty-source preparation, exact fingerprints, retention and disposal, and the distinction between topology isolation and backend confinement;
 - CLI;
 - Pi integration;
 - Core API;

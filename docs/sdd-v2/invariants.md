@@ -79,7 +79,7 @@ All original authority, provenance, completion and historical integrity guarante
 - INV-TRACE-001: Required Requirement -> Acceptance Criterion -> Architecture Decision -> Program Design Decision -> Slice -> Task -> Verifier -> Evidence coverage uses stable identities/revision bindings; uncovered MUST obligations block structural completion unless an explicit policy-authorized human waiver exists.
 - INV-COMPLETE-001: Completion requires current approved/consistent artifacts, satisfied task completion/traceability/finding policies, and current applicable evidence; relevant invalidation blocks or revokes completion applicability.
 
-## Context, capabilities, and workspaces (ADR-006, ADR-010)
+## Context, capabilities, and workspaces (ADR-006, ADR-010, ADR-014)
 
 - INV-CONTEXT-001: Context declarations and immutable snapshots define supplied knowledge, not capability grants; attempts bind relevant context and capability policy identities.
 - INV-CAP-001: A required hard capability MUST cause execution to fail closed when the selected backend cannot enforce it; prompt advice is not a fallback.
@@ -88,6 +88,22 @@ All original authority, provenance, completion and historical integrity guarante
 - INV-CAP-004: Host-permission arbitrary shell defeats filesystem confinement; Pi tool_call interception alone MUST NOT be claimed to provide process/filesystem/network/environment sandboxing or strong termination.
 - INV-WORKSPACE-001: Attempts/evidence bind a provider-neutral, policy/version-identified WorkspaceFingerprint capable of stable content/state identification, including Git repository/base/index/tree/tracked diff/untracked content/provider identities as applicable, not just git status --porcelain.
 - INV-WORKSPACE-002: Workspace isolation and execution sandboxing are separate capabilities; worktrees and container labels do not automatically satisfy required backend confinement or force_termination guarantees.
+
+Stage 06 adds new identifiers instead of renumbering or reusing INV-WORKSPACE-001/002. See the [WorkspaceProvider master contract](workspace-contract.md) for exact target semantics; these are not claims of current runtime enforcement.
+
+- INV-WORKSPACE-003: Control root and execution root are distinct semantic roles even when an explicitly in-place provider uses the same physical path.
+- INV-WORKSPACE-004: Every mutating attempt binds an exact immutable WorkspaceHandle/incarnation, exact starting WorkspaceFingerprint and workspace ownership fence; ending state and source provenance remain attributable rather than inferred from path.
+- INV-WORKSPACE-005: For one versioned policy and the same semantic state, WorkspaceFingerprint is deterministic independent of enumeration order, inode allocation, audit timestamps and scheduling; policy/provider/incarnation identity participates in exact comparison.
+- INV-WORKSPACE-006: Every prepared workspace records its exact immutable base and included mutable overlay or explicit omission; no dirty source state is silently included or discarded.
+- INV-WORKSPACE-007: At most one valid exclusive mutating WorkspaceStore claim governs an incarnation at a time; PID, path, or run claim alone does not establish workspace ownership.
+- INV-WORKSPACE-008: Recovery advances a monotone workspace fence before transfer, so stale owners cannot commit workspace lifecycle transitions; fencing does not prevent an unfenced OS process writing files.
+- INV-WORKSPACE-009: Disposal verifies authoritative identity/incarnation, ownership and actual resource/scope and fails closed on unrecognized paths or ambiguous work, preserving recoverable user data.
+- INV-WORKSPACE-010: Verification evidence applies only to the exact observed workspace fingerprint under its pinned policy and stable observation contract unless a separate explicit domain contract proves equivalence; matching before/after digests alone cannot establish a stable interval.
+- INV-WORKSPACE-011: A directory's existence, path name, provider convention or orphan materialization cannot create authoritative workspace identity, ownership or disposal authority; WorkspaceStore is the lifecycle authority.
+- INV-WORKSPACE-012: Preparation requires an exact reviewed source observation, dirty policy and freshness precondition; source drift fails or requires an explicitly new observation/intent, never a silent substitution.
+- INV-WORKSPACE-013: Default implementation/verification fingerprints exclude host Aira control-plane data such as `.aira/state/**`; excluded required verifier inputs need independent exact binding or a compatible explicit policy, never assumed coverage.
+- INV-WORKSPACE-014: Run claim and workspace claim are distinct authorities; partial cross-store publication cannot authorize dispatch or results, and current dual fences must be checked under coordinated publication.
+- INV-WORKSPACE-015: Abandoned, ambiguous or unexpectedly mutated workspaces can require manual reconciliation and must not be automatically reused, deleted or treated as safe attempt retries.
 - INV-AGENT-001: AgentRuntime remains provider-neutral and Spec Core has no Pi SDK dependency; current attempts use fresh disposable Pi in-memory sessions, not necessarily fresh OS processes or a strong termination boundary.
 
 ## Attempts and evidence (ADR-003, ADR-007, ADR-009)

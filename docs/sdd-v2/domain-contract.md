@@ -396,6 +396,13 @@ records ignored files, symlinks, submodules, generated files, exclusions, and Ai
 Exact comparison includes all components, not just the displayed digest. Stable observation
 and coordination-contract records make the completion observation boundary explicit.
 Worktree/container labels never imply process, network, environment, or termination guarantees.
+The existing `workspace-handle/v1`, `workspace-fingerprint/v1` and
+`workspace-observation/v1` are preliminary pure domain records. The normative
+[Stage 06 WorkspaceProvider contract](workspace-contract.md) adds distinct control
+and execution roots, incarnation, exact base/overlay provenance, pinned coverage,
+and fenced lifecycle authority through explicit **new** contract versions. Existing
+attempt/context/evidence bindings will need versioned evolution; their current
+fields are not evidence that the Stage 06 runtime or dual-store coordination exists.
 
 ## Verification, traceability, and completion
 
