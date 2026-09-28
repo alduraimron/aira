@@ -21,7 +21,8 @@
     "./steering-adoption": "./src/steering-adoption/index.ts",
     "./steering-materialization": "./src/steering-materialization/index.ts",
     "./steering-agents": "./src/steering-agents/index.ts",
-    "./steering-agents-import": "./src/steering-agents-import/index.ts"
+    "./steering-agents-import": "./src/steering-agents-import/index.ts",
+    "./workspace-local": "./src/workspace-local/index.ts"
   },
   "pi": {
     "extensions": [
