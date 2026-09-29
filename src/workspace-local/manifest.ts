@@ -1,4 +1,7 @@
+import { z } from "zod";
 import { hashCanonical } from "../canonical-json";
+import { contentHashSchema } from "../spec/domain/primitives";
+import { workspacePathStateSchema } from "../workspace/fingerprint-v2";
 import { exactPathSchema } from "../context/declarations";
 import { compareText } from "../spec/domain/primitives";
 import { freeze } from "../workspace/domain";
@@ -11,6 +14,26 @@ export function validLogicalPath(path: string, maxBytes: number): boolean {
     Buffer.from(path, "utf8").toString("utf8") === path;
 }
 export const aliasKey = (path: string): string => path.normalize("NFC").toLowerCase().normalize("NFC");
+/** Exact, canonical local-tree decoder for composition. No bytes are reread. */
+export const localTreeObservationSchema = z.strictObject({
+  schema: z.literal("aira.dev/workspace-local-tree/v1"), policy_hash: contentHashSchema,
+  capture_policy_hash: contentHashSchema,
+  entries: z.array(z.strictObject({ path: z.string(), state: workspacePathStateSchema })).max(250000),
+  hash: contentHashSchema,
+}).superRefine((tree, ctx) => {
+  const aliases = new Set<string>();
+  for (const [i, entry] of tree.entries.entries()) {
+    const alias = aliasKey(entry.path);
+    if (!validLogicalPath(entry.path, 4096) || aliases.has(alias) ||
+        i > 0 && compareText(tree.entries[i - 1]!.path, entry.path) >= 0 ||
+        !["regular", "symlink", "empty-directory"].includes(entry.state.kind))
+      ctx.addIssue({ code: "custom", message: "workspace-inspection-path-invalid" });
+    aliases.add(alias);
+  }
+  if (tree.hash !== hashCanonical({ schema: tree.schema, policy_hash: tree.policy_hash,
+    capture_policy_hash: tree.capture_policy_hash, entries: tree.entries }))
+    ctx.addIssue({ code: "custom", message: "workspace-inspection-incomplete" });
+});
 
 export function makeLocalTree(entries: readonly LocalTreeEntry[], inspection: LocalInspectionPolicy,
   capture: WorkspaceFingerprintPolicy): LocalTreeObservation {

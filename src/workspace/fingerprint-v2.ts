@@ -91,6 +91,27 @@ export const workspaceManifestEntrySchema = z.strictObject({
     ctx.addIssue({ code: "custom", message: "workspace-manifest-path-invalid" });
 });
 export type WorkspaceManifestEntry = DeepReadonly<z.infer<typeof workspaceManifestEntrySchema>>;
+/** Versioned Git object identity. A Git OID is never an Aira content hash. */
+export const gitIndexObjectSchema = z.strictObject({
+  kind: z.literal("git-object"), schema: z.literal("aira.dev/workspace-git-index-state/v1"),
+  object_format: z.enum(["sha1", "sha256"]), oid: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+  mode: z.enum(["100644", "100755", "120000"]),
+}).refine((s) => s.oid.length === (s.object_format === "sha1" ? 40 : 64), "workspace-fingerprint-invalid");
+/** v2 manifest fixes Git OID separation and gives Git-invisible empty directories their own category. */
+export const workspaceManifestEntryV2Schema = z.strictObject({
+  path: exactPathSchema.max(4096),
+  worktree: z.strictObject({ category: z.enum(["tracked", "untracked", "ignored", "local-only"]), state: workspacePathStateSchema }),
+  index: z.strictObject({ stage: z.literal(0), state: z.union([gitIndexObjectSchema, deletedSchema]) }).optional(),
+}).superRefine((e, ctx) => {
+  const valid = e.worktree.category === "local-only" ? e.worktree.state.kind === "empty-directory" && !e.index :
+    e.worktree.category === "tracked" ? e.worktree.state.kind !== "empty-directory" && !!e.index :
+    e.worktree.state.kind !== "deleted" && e.worktree.state.kind !== "empty-directory" &&
+      (!e.index || e.index.state.kind === "deleted");
+  if (!valid || e.worktree.state.kind === "nested-repository" ||
+      [".git", ".aira"].includes(e.path.split("/")[0]!.toLowerCase()))
+    ctx.addIssue({ code: "custom", message: "workspace-manifest-path-invalid" });
+});
+export type WorkspaceManifestEntryV2 = DeepReadonly<z.infer<typeof workspaceManifestEntryV2Schema>>;
 const manifestSubject = (entries: readonly WorkspaceManifestEntry[]) => ({ schema: "aira.dev/workspace-path-manifest/v1", entries });
 export const workspacePathManifestSchema = z.strictObject({
   schema: z.literal("aira.dev/workspace-path-manifest/v1"), hash: contentHashSchema,
@@ -115,11 +136,37 @@ export const workspacePathManifestSchema = z.strictObject({
   if (m.hash !== hashCanonical(manifestSubject(m.entries))) ctx.addIssue({ code: "custom", path: ["hash"], message: "workspace-fingerprint-invalid" });
 });
 export type WorkspacePathManifest = DeepReadonly<z.infer<typeof workspacePathManifestSchema>>;
+const manifestV2Subject = (entries: readonly WorkspaceManifestEntryV2[]) => ({ schema: "aira.dev/workspace-path-manifest/v2", entries });
+export const workspacePathManifestV2Schema = z.strictObject({
+  schema: z.literal("aira.dev/workspace-path-manifest/v2"), hash: contentHashSchema,
+  entries: z.array(workspaceManifestEntryV2Schema).max(250000),
+}).superRefine((m, ctx) => {
+  const paths = new Set<string>(), aliases = new Set<string>();
+  for (const [i, entry] of m.entries.entries()) {
+    const alias = entry.path.normalize("NFC").toLowerCase().normalize("NFC");
+    if (paths.has(entry.path) || aliases.has(alias) || i > 0 && compareText(m.entries[i - 1]!.path, entry.path) >= 0)
+      ctx.addIssue({ code: "custom", path: ["entries", i, "path"], message: "workspace-manifest-duplicate-path" });
+    paths.add(entry.path); aliases.add(alias);
+  }
+  const entriesByPath = new Map(m.entries.map((entry) => [entry.path, entry]));
+  for (const entry of m.entries) {
+    const segments = entry.path.split("/");
+    for (let i = 1; i < segments.length; i++) {
+      const ancestor = entriesByPath.get(segments.slice(0, i).join("/"));
+      // A physically empty directory can coexist with an absent tracked tombstone below it.
+      if (ancestor && !(ancestor.worktree.state.kind === "empty-directory" && entry.worktree.state.kind === "deleted"))
+        ctx.addIssue({ code: "custom", message: "workspace-manifest-path-invalid" });
+    }
+  }
+  if (m.hash !== hashCanonical(manifestV2Subject(m.entries)))
+    ctx.addIssue({ code: "custom", message: "workspace-fingerprint-invalid" });
+});
+export type WorkspacePathManifestV2 = DeepReadonly<z.infer<typeof workspacePathManifestV2Schema>>;
 
 const categorySchema = z.enum(["staged", "tracked", "untracked", "ignored"]);
 const stateComponentSchema = z.strictObject({ category: categorySchema, hash: contentHashSchema });
 const repositoryComponentSchema = z.strictObject({ kind: z.enum(["git-index", "git-tree"]), hash: contentHashSchema });
-export function stateComponents(entries: readonly WorkspaceManifestEntry[]) {
+export function stateComponents(entries: readonly (WorkspaceManifestEntry | WorkspaceManifestEntryV2)[]) {
   const categories = ["staged", "tracked", "untracked", "ignored"] as const;
   return categories.map((category) => ({ category, hash: hashCanonical({ schema: "aira.dev/workspace-state-component/v1", category,
     paths: entries.flatMap((entry): { path: string; state: unknown }[] => category === "staged" ?
@@ -132,14 +179,18 @@ export const workspaceFingerprintSubjectSchema = z.strictObject({
   workspace_id: workspaceIdSchema, incarnation: workspaceIncarnationSchema, project: projectIdentitySchema,
   repository: repositoryIdentitySchema.optional(), provider: workspaceProviderDescriptorSchema,
   source_observation: sourceObservationIdSchema, base: baseRevisionSchema,
-  policy: workspaceFingerprintPolicySchema, manifest: workspacePathManifestSchema,
+  policy: workspaceFingerprintPolicySchema, manifest: z.union([workspacePathManifestSchema, workspacePathManifestV2Schema]),
   state_components: z.array(stateComponentSchema).length(4),
   repository_components: z.array(repositoryComponentSchema).max(2),
 }).superRefine((s, ctx) => {
   const expectedComponents = stateComponents(s.manifest.entries);
+  const gitBase = s.base.kind === "git" ? s.base : undefined;
   if (s.base.kind === "git" ? s.base.repository !== s.repository ||
       s.repository_components.map((c) => c.kind).join(",") !== "git-index,git-tree" ||
-      s.manifest.entries.some((e) => e.worktree.category === "tracked" && !e.index) :
+      s.manifest.entries.some((e) => e.worktree.category === "tracked" && !e.index) ||
+      s.manifest.schema === "aira.dev/workspace-path-manifest/v2" && s.manifest.entries.some((e) =>
+        e.index?.state.kind === "git-object" && (e.index.state.object_format !== gitBase?.object_format ||
+          e.index.state.oid.length !== gitBase.commit.length)) :
       s.repository !== undefined || s.repository_components.length !== 0 ||
       s.manifest.entries.some((e) => e.index !== undefined))
     ctx.addIssue({ code: "custom", message: "workspace-fingerprint-invalid" });
@@ -163,18 +214,39 @@ export const workspaceFingerprintV2Schema = z.strictObject({
     ctx.addIssue({ code: "custom", message: "workspace-fingerprint-invalid" });
 });
 export type WorkspaceFingerprintV2 = DeepReadonly<z.infer<typeof workspaceFingerprintV2Schema>>;
-export function createWorkspaceFingerprint(input: {
-  binding: DeepReadonly<Omit<z.input<typeof workspaceFingerprintSubjectSchema>, "schema" | "manifest" | "state_components" | "repository_components">>;
+type FingerprintBinding = DeepReadonly<Omit<z.input<typeof workspaceFingerprintSubjectSchema>,
+  "schema" | "manifest" | "state_components" | "repository_components">>;
+type RepositoryComponentInput = DeepReadonly<z.input<typeof repositoryComponentSchema>>;
+type FingerprintAuditInput = DeepReadonly<z.input<typeof createdMetadataSchema>>;
+/** Existing v1-manifest calls retain their historical TypeScript shape and exact bytes. */
+export function createWorkspaceFingerprint(input: { binding: FingerprintBinding;
   entries: readonly DeepReadonly<z.input<typeof workspaceManifestEntrySchema>>[];
-  repository_components: readonly DeepReadonly<z.input<typeof repositoryComponentSchema>>[];
-  audit?: DeepReadonly<z.input<typeof createdMetadataSchema>>;
+  repository_components: readonly RepositoryComponentInput[]; audit?: FingerprintAuditInput;
+}): WorkspaceFingerprintV2 & { readonly subject: WorkspaceFingerprintV2["subject"] & { readonly manifest: WorkspacePathManifest } };
+export function createWorkspaceFingerprint(input: { binding: FingerprintBinding;
+  entries: readonly DeepReadonly<z.input<typeof workspaceManifestEntryV2Schema>>[];
+  manifest_schema: "aira.dev/workspace-path-manifest/v2";
+  repository_components: readonly RepositoryComponentInput[]; audit?: FingerprintAuditInput;
+}): WorkspaceFingerprintV2;
+export function createWorkspaceFingerprint(input: {
+  binding: FingerprintBinding;
+  entries: readonly DeepReadonly<z.input<typeof workspaceManifestEntrySchema> | z.input<typeof workspaceManifestEntryV2Schema>>[];
+  manifest_schema?: "aira.dev/workspace-path-manifest/v2";
+  repository_components: readonly RepositoryComponentInput[];
+  audit?: FingerprintAuditInput;
 }): WorkspaceFingerprintV2 {
   if (input.entries.length > 250000) throw new WorkspaceDomainError([{ code: "workspace-fingerprint-invalid", subject: "entries" }]);
   const entries = [...input.entries].sort((a, b) => compareText(a.path, b.path));
   // First parse each entry to reject unknown keys before computing any identity.
-  const parsedEntries = entries.map((entry) => required(checked(workspaceManifestEntrySchema, entry, "workspace-fingerprint-invalid")));
-  const manifest = required(checked(workspacePathManifestSchema, { ...manifestSubject(parsedEntries),
-    hash: hashCanonical(manifestSubject(parsedEntries)) }, "workspace-fingerprint-invalid"));
+  const manifest = input.manifest_schema === "aira.dev/workspace-path-manifest/v2" ? (() => {
+    const parsed = entries.map((entry) => required(checked(workspaceManifestEntryV2Schema, entry, "workspace-fingerprint-invalid")));
+    const subject = manifestV2Subject(parsed);
+    return required(checked(workspacePathManifestV2Schema, { ...subject, hash: hashCanonical(subject) }, "workspace-fingerprint-invalid"));
+  })() : (() => {
+    const parsed = entries.map((entry) => required(checked(workspaceManifestEntrySchema, entry, "workspace-fingerprint-invalid")));
+    const subject = manifestSubject(parsed);
+    return required(checked(workspacePathManifestSchema, { ...subject, hash: hashCanonical(subject) }, "workspace-fingerprint-invalid"));
+  })();
   const subject = required(checked(workspaceFingerprintSubjectSchema, {
     ...input.binding, schema: "aira.dev/workspace-fingerprint-subject/v2", manifest,
     state_components: stateComponents(manifest.entries),

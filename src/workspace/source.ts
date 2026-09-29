@@ -33,7 +33,15 @@ const gitHeadSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("detached") }),
   z.strictObject({ kind: z.literal("unborn") }),
 ]);
+/** Opt-in versioned closure; absent on historical v1 and provisional Git projections. */
+export const gitByteClosureSchema = z.strictObject({
+  schema: z.literal("aira.dev/workspace-git-byte-closure/v1"), status: z.literal("byte-complete"),
+  git_observation_hash: contentHashSchema, local_tree_hash: contentHashSchema,
+  git_policy_hash: contentHashSchema, local_policy_hash: contentHashSchema,
+  capture_policy_hash: contentHashSchema, manifest_hash: contentHashSchema,
+});
 const gitSourceSchema = z.strictObject({
+  byte_closure: gitByteClosureSchema.optional(),
   kind: z.literal("git"), repository: repositoryIdentitySchema,
   base: z.union([gitCommitSchema, unmaterializedSchema]),
   head: gitHeadSchema, worktree: z.strictObject({ kind: z.enum(["main", "linked"]), identity: contentHashSchema }),

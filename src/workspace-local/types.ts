@@ -5,6 +5,7 @@ type WorkspacePathState = z.infer<typeof workspacePathStateSchema>;
 import type { WorkspaceHandleV2 } from "../workspace/handle";
 import type { SourceObservation } from "../workspace/source";
 import type { LocalInspectionPolicy, ExclusionReason } from "./policy";
+import type { WorkspaceFingerprintPolicy } from "../workspace/fingerprint-v2";
 
 export type LocalPathState = Extract<WorkspacePathState, { kind: "regular" | "symlink" | "empty-directory" }>;
 export interface LocalTreeEntry { readonly path: string; readonly state: LocalPathState }
@@ -56,3 +57,20 @@ export interface InspectWorkspaceLocalOptions {
   readonly snapshotEvidence?: SnapshotEvidence;
 }
 export type FrozenInspection = DeepReadonly<WorkspaceLocalInspection>;
+/** Tree-only read for Git/source bootstrap. No handle, source freshness or fingerprint claim. */
+export interface InspectLocalTreeOptions {
+  readonly executionRoot: string; readonly controlRoot: string;
+  readonly relationship: "same-root" | "separate-root";
+  readonly capturePolicy: WorkspaceFingerprintPolicy;
+}
+export interface LocalTreeCapture {
+  readonly schema: "aira.dev/workspace-local-tree-capture/v1";
+  readonly status: "complete" | "incomplete"; readonly policy: LocalInspectionPolicy;
+  readonly root?: RootAudit; readonly tree?: LocalTreeObservation;
+  /** Operational recheck ticket; excluded from local-tree/source/fingerprint semantic hashes. */
+  readonly freshness?: readonly { readonly path: string; readonly device: string; readonly inode: string;
+    readonly mode: string; readonly links: string; readonly size: string;
+    readonly mtime_ns: string; readonly ctime_ns: string }[];
+  readonly excluded: readonly { readonly path: string; readonly reason: ExclusionReason }[];
+  readonly diagnostics: readonly InspectionIssue[];
+}

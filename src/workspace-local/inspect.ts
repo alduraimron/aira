@@ -5,13 +5,14 @@ import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { hashBytes } from "../canonical-json";
 import { contentHashSchema, compareText, exact } from "../spec/domain/primitives";
 import { freeze } from "../workspace/domain";
-import { validateWorkspaceHandle, type WorkspaceHandleV2 } from "../workspace/handle";
+import { validateWorkspaceHandle } from "../workspace/handle";
+import { workspaceFingerprintPolicySchema, type WorkspaceFingerprintPolicy } from "../workspace/fingerprint-v2";
 import { sourceObservationSchema } from "../workspace/source";
 import { localInspectionPolicy, excludedByPolicy, type ExclusionReason } from "./policy";
 import { aliasKey, makeLocalTree, validLogicalPath } from "./manifest";
 import { constructLocalFingerprint } from "./fingerprint";
-import type { InspectWorkspaceLocalOptions, InspectionIssue, InspectionIssueCode, LocalTreeEntry,
-  WorkspaceLocalInspection, RootAudit } from "./types";
+import type { InspectWorkspaceLocalOptions, InspectLocalTreeOptions, LocalTreeCapture,
+  InspectionIssue, InspectionIssueCode, LocalTreeEntry, WorkspaceLocalInspection, RootAudit } from "./types";
 
 type Stat = BigIntStats;
 interface Directory { path: string; logical: string; stat: Stat }
@@ -43,6 +44,9 @@ const sameIdentity = (a: Stat, b: Stat) => a.dev === b.dev && a.ino === b.ino;
 const sameStat = (a: Stat, b: Stat) => sameIdentity(a, b) && a.mode === b.mode && a.nlink === b.nlink &&
   a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 const rootAudit = (r: Root): RootAudit => ({ path: r.path, device: r.stat.dev.toString(), inode: r.stat.ino.toString() });
+const stamp = (logical: string, stat: Stat) => ({ path: logical, device: stat.dev.toString(), inode: stat.ino.toString(),
+  mode: stat.mode.toString(), links: stat.nlink.toString(), size: stat.size.toString(),
+  mtime_ns: stat.mtimeNs.toString(), ctime_ns: stat.ctimeNs.toString() });
 const inside = (root: string, target: string): boolean => {
   const part = relative(root, target);
   return part === "" || (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
@@ -184,9 +188,9 @@ async function linkState(root: Root, logical: string, before: Stat) {
   return { kind: "symlink" as const, target_hash: hashBytes(target), target_bytes: target.length };
 }
 
-async function scan(root: Root, handle: WorkspaceHandleV2, state: State, hooks: InspectionTestHooks): Promise<void> {
+async function scan(root: Root, capture: WorkspaceFingerprintPolicy, state: State, hooks: InspectionTestHooks): Promise<void> {
   const stack: { logical: string; depth: number; stat: Stat }[] = [{ logical: ".", depth: 0, stat: root.stat }];
-  const policy = handle.fingerprint_policy.configuration;
+  const policy = capture.configuration;
   const exclusions = [...policy.exclusions, ...policy.additional_exclusions];
   while (stack.length) {
     const dir = stack.pop()!;
@@ -285,7 +289,7 @@ export async function inspectWorkspaceLocal(options: InspectWorkspaceLocalOption
     const before = sourceObservationSchema.safeParse(await options.observeSource());
     if (!before.success || !exact(before.data.subject, h.source.subject) || before.data.id !== h.source.id)
       fail("workspace-inspection-policy-incompatible", ".", "source-stale-or-unavailable");
-    await scan(root, h, state, hooks);
+    await scan(root, h.fingerprint_policy, state, hooks);
     await hooks.beforeFinalCheck?.();
     for (const dir of state.directories) await checkPath(root, dir.logical, dir.stat);
     for (const entry of state.observed) await checkPath(root, entry.logical, entry.stat);
@@ -317,5 +321,80 @@ export async function inspectWorkspaceLocal(options: InspectWorkspaceLocalOption
       catch { if (value.code !== "workspace-inspection-root-changed") state.diagnostics.push(issue("workspace-inspection-root-changed", ".")); }
     }
     return result(root);
+  }
+}
+
+/** Reuses the exact 06-2A walker for a byte tree before a complete source/handle exists.
+ * This alone does not assert source freshness, ownership or a fingerprint. */
+export async function inspectWorkspaceLocalTree(options: InspectLocalTreeOptions, hooks: InspectionTestHooks = {}): Promise<LocalTreeCapture> {
+  const parsed = workspaceFingerprintPolicySchema.safeParse(options?.capturePolicy);
+  const state: State = { entries: [], excluded: [], rejected: [], diagnostics: [], directories: [],
+    observed: [], aliases: new Set(), visited: 0, hashed: 0n };
+  const result = (root?: Root): LocalTreeCapture => freeze({ schema: "aira.dev/workspace-local-tree-capture/v1" as const,
+    status: state.diagnostics.length ? "incomplete" as const : "complete" as const, policy: localInspectionPolicy,
+    ...(root ? { root: rootAudit(root) } : {}),
+    ...(!state.diagnostics.length && parsed.success ?
+      { tree: makeLocalTree(state.entries, localInspectionPolicy, parsed.data),
+        freshness: [...state.directories.map((entry) => stamp(entry.logical, entry.stat)),
+          ...state.observed.map((entry) => stamp(entry.logical, entry.stat))]
+          .sort((a, b) => compareText(a.path, b.path)) } : {}),
+    excluded: state.excluded.sort((a, b) => compareText(a.path, b.path)),
+    diagnostics: state.diagnostics.sort((a, b) => compareText(a.path, b.path) || compareText(a.code, b.code)),
+  });
+  if (!parsed.success || typeof options.executionRoot !== "string" || typeof options.controlRoot !== "string" ||
+      !["same-root", "separate-root"].includes(options.relationship) ||
+      (options.relationship === "same-root") !== (options.executionRoot === options.controlRoot) ||
+      process.platform !== "linux") {
+    state.diagnostics.push(issue("workspace-inspection-policy-incompatible", "."));
+    return result();
+  }
+  let root: Root | undefined;
+  try {
+    root = await rootAt(options.executionRoot);
+    const control = await rootAt(options.controlRoot);
+    if (options.relationship === "separate-root" && (sameIdentity(root.stat, control.stat) ||
+        inside(root.path, control.path) || inside(control.path, root.path)))
+      fail("workspace-inspection-root-unsafe", ".", "control-execution-overlap");
+    await scan(root, parsed.data, state, hooks);
+    await hooks.beforeFinalCheck?.();
+    for (const dir of state.directories) await checkPath(root, dir.logical, dir.stat);
+    for (const entry of state.observed) await checkPath(root, entry.logical, entry.stat);
+    await checkRoot(root); await checkRoot(control);
+    return result(root);
+  } catch (error) {
+    state.diagnostics.push(diagnostic(error, "."));
+    return result(root);
+  }
+}
+
+/** Post-Git operational freshness check. Never rehashes file contents or claims an atomic interval. */
+export async function recheckWorkspaceLocalTree(capture: LocalTreeCapture): Promise<{
+  readonly status: "match" | "changed"; readonly diagnostics: readonly InspectionIssue[];
+}> {
+  try {
+    if (capture.status !== "complete" || !capture.root || !capture.freshness ||
+        !Array.isArray(capture.freshness) || capture.freshness.length > 500000 ||
+        !capture.freshness.some((item) => item.path === "."))
+      fail("workspace-inspection-incomplete", ".", "freshness-ticket-required");
+    const anchor = capture.root!, stamps = capture.freshness!;
+    const root = await rootAt(anchor.path);
+    if (root.stat.dev.toString() !== anchor.device || root.stat.ino.toString() !== anchor.inode)
+      fail("workspace-inspection-root-changed", ".");
+    let last = "";
+    for (const item of stamps) {
+      if (item.path !== "." && !validLogicalPath(item.path, localInspectionPolicy.bounds.max_path_bytes) ||
+          last && compareText(last, item.path) >= 0)
+        fail("workspace-inspection-path-invalid", item.path);
+      last = item.path;
+      const now = await checkPath(root, item.path);
+      if (now.dev.toString() !== item.device || now.ino.toString() !== item.inode ||
+          now.mode.toString() !== item.mode || now.nlink.toString() !== item.links ||
+          now.size.toString() !== item.size || now.mtimeNs.toString() !== item.mtime_ns ||
+          now.ctimeNs.toString() !== item.ctime_ns)
+        fail("workspace-inspection-entry-changed", item.path, "post-git-stat-drift");
+    }
+    return freeze({ status: "match" as const, diagnostics: [] });
+  } catch (error) {
+    return freeze({ status: "changed" as const, diagnostics: [diagnostic(error, ".")] });
   }
 }
